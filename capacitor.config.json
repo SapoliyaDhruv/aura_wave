@@ -1,0 +1,22 @@
+{
+  "appId": "com.aurawave.music",
+  "appName": "AuraWave",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*.youtube.com",
+      "*.ytimg.com",
+      "*.googlevideo.com",
+      "aurawave-music.vercel.app",
+      "cdn.pixabay.com",
+      "itunes.apple.com",
+      "*.mzstatic.com"
+    ]
+  }
+}
+
