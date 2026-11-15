@@ -251,25 +251,12 @@ public class MusicPlaybackService extends Service {
     }
 
     private void requestFocus() {
-        if (hasFocus || audioManager == null) return;
-        if (focusRequest == null) {
-            AudioAttributesCompat attrs = new AudioAttributesCompat.Builder()
-                .setUsage(AudioAttributesCompat.USAGE_MEDIA)
-                .setContentType(AudioAttributesCompat.CONTENT_TYPE_MUSIC)
-                .build();
-            focusRequest = new AudioFocusRequestCompat.Builder(AudioManagerCompat.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attrs)
-                .setWillPauseWhenDucked(false)
-                .setOnAudioFocusChangeListener(focusListener, main)
-                .build();
-        }
-        hasFocus = AudioManagerCompat.requestAudioFocus(audioManager, focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        // Audio playback is managed directly by Chromium inside WebView.
+        // Requesting audio focus here from the background service causes Android OS to revoke
+        // audio focus from Chromium, causing Chromium to immediately pause playback after a fraction of a second.
     }
 
     private void abandonFocus() {
-        if (focusRequest != null && audioManager != null) {
-            AudioManagerCompat.abandonAudioFocusRequest(audioManager, focusRequest);
-        }
         hasFocus = false;
     }
 

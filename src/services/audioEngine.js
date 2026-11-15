@@ -505,7 +505,13 @@ class AudioEngine {
   }
 
   _playSilentAudio() {
+    // Only use silent PCM audio on pure web browsers if needed.
+    // On native Android/Capacitor, the native MusicPlaybackService foreground service holds CPU wake lock,
+    // and playing a silent HTML5 Audio stream concurrently with YouTube causes Android's media framework
+    // to pause or interrupt the active stream.
     try {
+      if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return;
+      if (this.activeMode === 'yt') return;
       if (!this._silentAudioUrl) {
         this._silentAudioUrl = createSilentAudioUrl();
         this.silentAudio.src = this._silentAudioUrl;
@@ -548,6 +554,7 @@ class AudioEngine {
       this.htmlAudio.pause();
       this._pauseSilentAudio();
       this.isPlaying = true;
+      this.userWantsPlay = true;
       this.isBuffering = false;
       this._requestWakeLock();
       this._startProgressTicker();
@@ -566,11 +573,15 @@ class AudioEngine {
         return;
       }
 
-      // App is in background / screen locked or player temporarily stalled:
-      // Gently ensure YouTube resumes playback with pacing to prevent buffer thrashing
-      this.isPlaying = true;
+      // If YouTube entered paused state while user wants play:
+      // Update isPlaying to false so UI controls accurately show Play and togglePlay can resume!
+      this.isPlaying = false;
+      this._updateMediaSessionPlayback('paused');
+      this._emit('stateChange', { isPlaying: false, isBuffering: false });
+
+      // Gently attempt automatic resume if it was an engine or background hiccup
       const now = Date.now();
-      if (!this._lastPauseKickTime || now - this._lastPauseKickTime > 1500) {
+      if (!this._lastPauseKickTime || now - this._lastPauseKickTime > 1200) {
         this._lastPauseKickTime = now;
         if (this.ytPlayer && typeof this.ytPlayer.playVideo === 'function') {
           try {
@@ -864,9 +875,8 @@ class AudioEngine {
         });
       }
     } else if (this.activeMode === 'yt') {
-      // Ensure HTML audio is stopped and silent keep-alive holds OS audio focus
+      // Ensure HTML audio is stopped
       this.htmlAudio.pause();
-      this._playSilentAudio();
       this._startProgressTicker();
       this._lastPauseKickTime = Date.now();
       if (this.ytPlayer && typeof this.ytPlayer.playVideo === 'function') {
@@ -877,7 +887,12 @@ class AudioEngine {
           if (typeof this.ytPlayer.setVolume === 'function') {
             try { this.ytPlayer.setVolume(this.volume * 100); } catch (_) {}
           }
-          this.ytPlayer.playVideo();
+          const pState = typeof this.ytPlayer.getPlayerState === 'function' ? this.ytPlayer.getPlayerState() : -1;
+          if (pState === 2 || pState === 5 || pState === -1) {
+            this.ytPlayer.playVideo();
+          } else {
+            this.playTrack(this.currentTrack);
+          }
         } catch (e) {
           console.warn('YouTube playVideo failed during resume, falling back to playTrack:', e);
           this.playTrack(this.currentTrack);
