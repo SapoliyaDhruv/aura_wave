@@ -36,3 +36,6 @@ android/captures/
 
 # Scratch & temporary scripts
 scratch/
+
+# Capacitor generated public web assets inside Android
+android/app/src/main/assets/public/
