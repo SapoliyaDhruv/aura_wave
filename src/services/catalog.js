@@ -53,6 +53,55 @@ export function normalizeTrack(t) {
 
 // ---------- search ----------
 
+function dedupeAndRankTracks(tracks, query) {
+  const q = (query || '').toLowerCase().trim();
+  const seen = new Set();
+  const unique = [];
+
+  for (const t of tracks) {
+    if (!t) continue;
+    const normTitle = (t.title || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const normArtist = (t.artist || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const key = `${normTitle}:${normArtist}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(t);
+  }
+
+  return unique.sort((a, b) => {
+    const aTitle = (a.title || '').toLowerCase().trim();
+    const bTitle = (b.title || '').toLowerCase().trim();
+    const aArtist = (a.artist || '').toLowerCase().trim();
+    const bArtist = (b.artist || '').toLowerCase().trim();
+
+    // 1. Exact title match
+    const aExact = aTitle === q;
+    const bExact = bTitle === q;
+    if (aExact && !bExact) return -1;
+    if (!aExact && bExact) return 1;
+
+    // 2. Title starts with query
+    const aStarts = aTitle.startsWith(q);
+    const bStarts = bTitle.startsWith(q);
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+
+    // 3. Exact artist match
+    const aArtExact = aArtist === q;
+    const bArtExact = bArtist === q;
+    if (aArtExact && !bArtExact) return -1;
+    if (!aArtExact && bArtExact) return 1;
+
+    // 4. Artist starts with query
+    const aArtStarts = aArtist.startsWith(q);
+    const bArtStarts = bArtist.startsWith(q);
+    if (aArtStarts && !bArtStarts) return -1;
+    if (!aArtStarts && bArtStarts) return 1;
+
+    return 0;
+  });
+}
+
 export async function search(query) {
   const q = query.trim();
   if (!q) return { songs: [], videos: [], artists: [] };
@@ -63,21 +112,22 @@ export async function search(query) {
   try {
     const res = await once(key, () => getJson('/api/music/search', { q }));
     const rawSongs = res.songs || res.results || [];
+    const normalizedSongs = rawSongs.map(normalizeTrack).filter(Boolean);
     const out = {
-      songs: rawSongs.map(normalizeTrack),
-      videos: (res.videos || []).map(normalizeTrack),
+      songs: dedupeAndRankTracks(normalizedSongs, q),
+      videos: (res.videos || []).map(normalizeTrack).filter(Boolean),
       artists: res.artists || [],
     };
     if (out.songs.length === 0) {
       const localMatches = searchCatalog(q);
-      if (localMatches.length > 0) out.songs = localMatches;
+      if (localMatches.length > 0) out.songs = dedupeAndRankTracks(localMatches, q);
     }
     setCached(key, out);
     return out;
   } catch (err) {
     const localMatches = searchCatalog(q);
     if (localMatches.length > 0) {
-      const fallback = { songs: localMatches, videos: [], artists: [] };
+      const fallback = { songs: dedupeAndRankTracks(localMatches, q), videos: [], artists: [] };
       return fallback;
     }
     throw err;

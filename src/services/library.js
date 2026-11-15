@@ -256,6 +256,10 @@ export const library = {
     if (!query) return;
     commit({ searches: [query, ...this.getState().searches.filter((s) => s.toLowerCase() !== query.toLowerCase())].slice(0, 10) });
   },
+  removeRecentSearch(q) {
+    const query = (q || '').trim().toLowerCase();
+    commit({ searches: this.getState().searches.filter((s) => s.toLowerCase() !== query) });
+  },
   clearRecentSearches() {
     commit({ searches: [] });
   },

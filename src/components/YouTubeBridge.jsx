@@ -16,19 +16,14 @@ function ensurePlayer() {
 
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
-  // Full opacity (1), normal viewport dimensions (240x240), pointer-events: none so clicks pass through.
-  // Overlaid with a solid background cover (#0e0b14) so the video is visually hidden from the user,
-  // while Chromium and YouTube's player engine treat the iframe as an active, fully visible surface.
-  host.style.cssText = 'position:fixed;bottom:0;right:0;width:240px;height:240px;opacity:1;pointer-events:none;z-index:0;overflow:hidden;transform:translateZ(0);';
+  // 100% invisible: opacity 0.001, z-index -9999, no background color, pointer-events none.
+  // Leaves zero visual boxes on any screen while keeping the surface active in layout for audio streaming.
+  host.style.cssText = 'position:fixed;bottom:0;right:0;width:240px;height:240px;opacity:0.001;pointer-events:none;z-index:-9999;overflow:hidden;transform:translateZ(0);';
 
   const target = document.createElement('div');
   target.id = 'yt-embedded-player';
-  target.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:1;';
+  target.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
   host.appendChild(target);
-
-  const cover = document.createElement('div');
-  cover.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;background:#0e0b14;z-index:2;pointer-events:none;';
-  host.appendChild(cover);
 
   document.body.appendChild(host);
 
