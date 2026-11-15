@@ -140,7 +140,7 @@ export async function resolveTrack(track, { exclude = [] } = {}) {
       exclude: exclude.join(',') || undefined,
     }, { timeout: 12000 }));
     if (!res.track) {
-      if (legacy?.youtubeId) return { ...track, youtubeId: legacy.youtubeId, coverUrl: track.coverUrl || legacy.coverUrl };
+      if (legacy?.youtubeId && !exclude.includes(legacy.youtubeId)) return { ...track, youtubeId: legacy.youtubeId, coverUrl: track.coverUrl || legacy.coverUrl };
       setCached(`${key}:miss`, true);
       return null;
     }
@@ -153,7 +153,7 @@ export async function resolveTrack(track, { exclude = [] } = {}) {
     setCached(key, patch);
     return { ...track, ...patch };
   } catch (err) {
-    if (legacy?.youtubeId) return { ...track, youtubeId: legacy.youtubeId, coverUrl: track.coverUrl || legacy.coverUrl };
+    if (legacy?.youtubeId && !exclude.includes(legacy.youtubeId)) return { ...track, youtubeId: legacy.youtubeId, coverUrl: track.coverUrl || legacy.coverUrl };
     throw err;
   }
 }

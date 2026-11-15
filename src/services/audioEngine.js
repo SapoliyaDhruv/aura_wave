@@ -367,11 +367,10 @@ class AudioEngine {
   setYouTubePlayer(player) {
     this.ytPlayer = player;
     if (this._ytPlayerReadyResolver) {
-      this._ytPlayerReadyResolver(player);
+      const resolver = this._ytPlayerReadyResolver;
       this._ytPlayerReadyResolver = null;
-    }
-    // Auto-resume or play any pending track that was waiting for YouTube iframe API
-    if (this._pendingTrack && this.userWantsPlay) {
+      resolver(player);
+    } else if (this._pendingTrack && this.userWantsPlay) {
       const track = this._pendingTrack;
       this._pendingTrack = null;
       this.playTrack(track);
@@ -618,7 +617,8 @@ class AudioEngine {
           track.youtubeId = alt.youtubeId;
           this._emit('resolved', { track: { ...track } });
           this.activeMode = 'yt';
-          this.ytPlayer.loadVideoById(alt.youtubeId, 0);
+          const cleanAltId = String(alt.youtubeId).replace(/^yt-/, '').trim();
+          this.ytPlayer.loadVideoById(cleanAltId, 0);
           this.ytPlayer.setVolume(this.volume * 100);
           this.ytPlayer.playVideo();
           return;
@@ -780,7 +780,7 @@ class AudioEngine {
       } catch (_) {}
 
       try {
-        const cleanId = String(ytId).trim();
+        const cleanId = String(ytId).replace(/^yt-/, '').trim();
         if (typeof player.unMute === 'function') {
           try { player.unMute(); } catch (_) {}
         }

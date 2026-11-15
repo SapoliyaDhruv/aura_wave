@@ -16,47 +16,100 @@ function ensurePlayer() {
 
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
-  // Kept in the viewport (YouTube may throttle players it considers invisible) but 2px and inert.
-  host.style.cssText = 'position:fixed;bottom:0;right:0;width:2px;height:2px;overflow:hidden;pointer-events:none;z-index:0;';
+  // Kept at YouTube's required minimum size (240x240) with slight opacity and z-index -1 so
+  // Chromium / Android WebView considers it an active visible surface for autoplay without user obstruction.
+  host.style.cssText = 'position:fixed;bottom:0;right:0;width:240px;height:240px;opacity:0.001;pointer-events:none;z-index:-1;overflow:hidden;transform:translateZ(0);';
   const target = document.createElement('div');
   target.id = 'yt-embedded-player';
   host.appendChild(target);
   document.body.appendChild(host);
 
   const permit = () => {
-    const iframe = host.querySelector('iframe');
-    if (iframe) {
-      iframe.setAttribute('allow', 'autoplay *; encrypted-media *; picture-in-picture *; fullscreen *');
-      iframe.setAttribute('playsinline', '1');
-    }
+    try {
+      const iframe = document.querySelector('#yt-embedded-player iframe') || document.querySelector('iframe#yt-embedded-player') || host.querySelector('iframe');
+      if (iframe) {
+        iframe.setAttribute('allow', 'autoplay *; encrypted-media *; picture-in-picture *; fullscreen *');
+        iframe.setAttribute('playsinline', '1');
+        iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+      }
+    } catch (_) {}
   };
 
+  const origin = (typeof window !== 'undefined' && window.location?.origin && !window.location.origin.includes('localhost') && !window.location.origin.startsWith('capacitor:'))
+    ? window.location.origin
+    : 'https://aurawave-music.vercel.app';
+
+  let created = false;
   const create = () => {
-    // eslint-disable-next-line no-new
-    new window.YT.Player(target, {
-      // YouTube's minimum player size: the smallest video stream to decode (we only need the audio).
-      height: '200',
-      width: '200',
-      host: 'https://www.youtube.com',
-      playerVars: { autoplay: 1, controls: 0, disablekb: 1, enablejsapi: 1, fs: 0, modestbranding: 1, playsinline: 1, rel: 0, origin: window.location.origin },
-      events: {
-        onReady: (e) => { permit(); audioEngine.setYouTubePlayer(e.target); },
-        onStateChange: (e) => audioEngine.handleYouTubeStateChange(e.data),
-        onError: (e) => audioEngine.handleYouTubeError(e.data),
-      },
-    });
-    setTimeout(permit, 300);
+    if (created || !window.YT || !window.YT.Player) return;
+    created = true;
+    try {
+      new window.YT.Player('yt-embedded-player', {
+        height: '240',
+        width: '240',
+        host: 'https://www.youtube.com',
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          enablejsapi: 1,
+          fs: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          rel: 0,
+          origin,
+          widget_referrer: origin,
+        },
+        events: {
+          onReady: (e) => {
+            permit();
+            audioEngine.setYouTubePlayer(e.target);
+          },
+          onStateChange: (e) => {
+            permit();
+            audioEngine.handleYouTubeStateChange(e.data);
+          },
+          onError: (e) => {
+            console.warn('YouTube playback error event code:', e.data);
+            audioEngine.handleYouTubeError(e.data);
+          },
+        },
+      });
+      setTimeout(permit, 150);
+      setTimeout(permit, 600);
+    } catch (err) {
+      console.warn('Error creating YT.Player:', err);
+      created = false;
+    }
   };
 
   if (window.YT?.Player) {
     create();
     return;
   }
+
+  if (window.YT?.ready) {
+    window.YT.ready(create);
+  }
+
   const previous = window.onYouTubeIframeAPIReady;
   window.onYouTubeIframeAPIReady = () => {
     if (typeof previous === 'function') previous();
     create();
   };
+
+  // Continual poll for up to 10 seconds in case script already ran before callback registered
+  let attempts = 0;
+  const poll = setInterval(() => {
+    attempts++;
+    if (window.YT?.Player) {
+      clearInterval(poll);
+      create();
+    } else if (attempts > 100) {
+      clearInterval(poll);
+    }
+  }, 100);
+
   if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
     const tag = document.createElement('script');
     tag.src = 'https://www.youtube.com/iframe_api';
