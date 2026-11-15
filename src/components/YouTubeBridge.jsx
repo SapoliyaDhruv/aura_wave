@@ -1,128 +1,71 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { audioEngine } from '../services/audioEngine';
 
+/**
+ * Creates the hidden YouTube IFrame player exactly once for the app's lifetime.
+ *
+ * The player lives in a container attached directly to <body>, outside React,
+ * so remounts (StrictMode, onboarding -> main app, layout changes) can never
+ * create a second player or leave the audio engine holding a dead one.
+ */
+let started = false;
+
+function ensurePlayer() {
+  if (started || typeof window === 'undefined') return;
+  started = true;
+
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  // Kept in the viewport (YouTube may throttle players it considers invisible) but 2px and inert.
+  host.style.cssText = 'position:fixed;bottom:0;right:0;width:2px;height:2px;overflow:hidden;pointer-events:none;z-index:0;';
+  const target = document.createElement('div');
+  target.id = 'yt-embedded-player';
+  host.appendChild(target);
+  document.body.appendChild(host);
+
+  const permit = () => {
+    const iframe = host.querySelector('iframe');
+    if (iframe) {
+      iframe.setAttribute('allow', 'autoplay *; encrypted-media *; picture-in-picture *; fullscreen *');
+      iframe.setAttribute('playsinline', '1');
+    }
+  };
+
+  const create = () => {
+    // eslint-disable-next-line no-new
+    new window.YT.Player(target, {
+      // YouTube's minimum player size: the smallest video stream to decode (we only need the audio).
+      height: '200',
+      width: '200',
+      host: 'https://www.youtube.com',
+      playerVars: { autoplay: 1, controls: 0, disablekb: 1, enablejsapi: 1, fs: 0, modestbranding: 1, playsinline: 1, rel: 0, origin: window.location.origin },
+      events: {
+        onReady: (e) => { permit(); audioEngine.setYouTubePlayer(e.target); },
+        onStateChange: (e) => audioEngine.handleYouTubeStateChange(e.data),
+        onError: (e) => audioEngine.handleYouTubeError(e.data),
+      },
+    });
+    setTimeout(permit, 300);
+  };
+
+  if (window.YT?.Player) {
+    create();
+    return;
+  }
+  const previous = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = () => {
+    if (typeof previous === 'function') previous();
+    create();
+  };
+  if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.async = true;
+    document.head.appendChild(tag);
+  }
+}
+
 export default function YouTubeBridge() {
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    let playerInstance = null;
-    let pollInterval = null;
-
-    const applyIframePermissions = () => {
-      try {
-        const iframe = document.querySelector('#yt-embedded-player iframe') || document.querySelector('iframe#yt-embedded-player');
-        if (iframe) {
-          iframe.setAttribute('allow', 'autoplay *; encrypted-media *; picture-in-picture *; fullscreen *');
-          iframe.setAttribute('playsinline', '1');
-        }
-      } catch (_) {}
-    };
-
-    const createPlayer = () => {
-      if (playerInstance) return;
-      const el = document.getElementById('yt-embedded-player');
-      if (!el) return;
-
-      if (window.YT && window.YT.Player) {
-        try {
-          const originUrl = typeof window !== 'undefined' && window.location ? window.location.origin : 'https://localhost';
-
-          playerInstance = new window.YT.Player('yt-embedded-player', {
-            height: '240',
-            width: '240',
-            host: 'https://www.youtube.com',
-            playerVars: {
-              autoplay: 1,
-              controls: 0,
-              disablekb: 1,
-              enablejsapi: 1,
-              fs: 0,
-              modestbranding: 1,
-              playsinline: 1,
-              rel: 0,
-              origin: originUrl
-            },
-            events: {
-              onReady: (event) => {
-                console.log('✅ YouTube Player is READY and connected to AudioEngine');
-                applyIframePermissions();
-                audioEngine.setYouTubePlayer(event.target);
-              },
-              onStateChange: (event) => {
-                applyIframePermissions();
-                audioEngine.handleYouTubeStateChange(event.data);
-              },
-              onError: (event) => {
-                console.warn('⚠️ YouTube playback error event:', event.data);
-                audioEngine.handleYouTubeError(event.data);
-              }
-            }
-          });
-
-          // Post-creation permission enhancement
-          setTimeout(applyIframePermissions, 100);
-          setTimeout(applyIframePermissions, 500);
-        } catch (err) {
-          console.warn('Error creating YT.Player:', err);
-        }
-      }
-    };
-
-    // Ensure YouTube Iframe API script is present
-    if (typeof window !== 'undefined' && !window.YT && !document.getElementById('yt-iframe-script')) {
-      const tag = document.createElement('script');
-      tag.id = 'yt-iframe-script';
-      tag.src = 'https://www.youtube.com/iframe_api';
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      if (firstScriptTag && firstScriptTag.parentNode) {
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-      } else {
-        document.head.appendChild(tag);
-      }
-    }
-
-    if (window.YT && window.YT.Player) {
-      createPlayer();
-    } else {
-      const prevCallback = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        if (typeof prevCallback === 'function') prevCallback();
-        createPlayer();
-      };
-
-      // Poll every 200ms to catch ready state
-      pollInterval = setInterval(() => {
-        if (window.YT && window.YT.Player) {
-          clearInterval(pollInterval);
-          pollInterval = null;
-          createPlayer();
-        }
-      }, 200);
-    }
-
-    return () => {
-      if (pollInterval) clearInterval(pollInterval);
-    };
-  }, []);
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        bottom: '0',
-        right: '0',
-        width: '2px',
-        height: '2px',
-        pointerEvents: 'none',
-        zIndex: 0,
-        opacity: 1,
-        overflow: 'hidden',
-        transform: 'translateZ(0)',
-        willChange: 'transform'
-      }}
-      aria-hidden="true"
-    >
-      <div id="yt-embedded-player" ref={containerRef} />
-    </div>
-  );
+  useEffect(() => { ensurePlayer(); }, []);
+  return null;
 }

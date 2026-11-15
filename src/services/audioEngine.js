@@ -3,38 +3,56 @@
  * Strictly coordinates HTML5 Audio and YouTube Iframe Streaming to guarantee
  * zero overlapping audio, instant play/pause, race-condition immunity, and 100% clean playback.
  */
-import { resolveYouTubeTrack, clearYtCache } from './spotifyService.js';
-import { offlineStorage } from './offlineStorage.js';
+import { resolveTrack } from './catalog.js';
+import { isBackground, onPowerChange } from './power.js';
 import { Capacitor } from '@capacitor/core';
 
+let lastNativeSync = null;
+
+/** Small cover for the lock screen / notification (the native side scales it too). */
+function lockScreenCover(url) {
+  if (!url) return '';
+  return /googleusercontent\.com|ggpht\.com/.test(url) ? url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, '=w300-h300-l90-rj') : url;
+}
+
+/**
+ * Tells the Android service what is playing. Each call rebuilds a notification and
+ * touches the foreground service, so calls are skipped unless something visible
+ * changed (song, cover, play/pause) or the position jumped (a seek).
+ */
 function syncNativeLockScreen(track, isPlaying, positionSec) {
   try {
-    if (Capacitor && Capacitor.isNativePlatform() && Capacitor.Plugins && Capacitor.Plugins.MediaNotification) {
-      if (!track && !isPlaying) {
-        Capacitor.Plugins.MediaNotification.clear().catch(() => {});
-        return;
-      }
-      Capacitor.Plugins.MediaNotification.update({
-        title: track?.title || 'AuraWave Music',
-        artist: track?.artist || 'Playing',
-        coverUrl: track?.coverUrl || '',
-        duration: Math.round(track?.duration || 180),
-        position: Math.round(positionSec || 0),
-        isPlaying: !!isPlaying
-      }).catch(() => {});
+    if (!(Capacitor && Capacitor.isNativePlatform() && Capacitor.Plugins && Capacitor.Plugins.MediaNotification)) return;
+    if (!track && !isPlaying) {
+      lastNativeSync = null;
+      Capacitor.Plugins.MediaNotification.clear().catch(() => {});
+      return;
     }
+    const now = Date.now();
+    const position = Math.round(positionSec || 0);
+    const payload = {
+      title: track?.title || 'AuraWave',
+      artist: track?.artist || '',
+      coverUrl: lockScreenCover(track?.coverUrl || ''),
+      duration: Math.round(track?.duration || 0),
+      position,
+      isPlaying: !!isPlaying,
+    };
+    const prev = lastNativeSync;
+    // Don't put a notification up for a restored-but-never-played session.
+    if (!prev && !payload.isPlaying) return;
+    if (prev && prev.title === payload.title && prev.artist === payload.artist && prev.coverUrl === payload.coverUrl && prev.isPlaying === payload.isPlaying) {
+      const expected = prev.position + (prev.isPlaying ? (now - prev.at) / 1000 : 0);
+      if (Math.abs(expected - position) < 4) return;
+    }
+    lastNativeSync = { ...payload, at: now };
+    Capacitor.Plugins.MediaNotification.update(payload).catch(() => {});
   } catch (_) {}
 }
 
 
 
-const FALLBACK_AUDIO_POOL = [
-  'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=synthwave-80s-110045.mp3',
-  'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3?filename=lofi-study-112191.mp3',
-  'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a73467.mp3?filename=electronic-future-beats-117997.mp3',
-  'https://cdn.pixabay.com/download/audio/2022/02/07/audio_bf05477ef2.mp3?filename=glossy-168156.mp3',
-  'https://cdn.pixabay.com/download/audio/2021/09/06/audio_9879f972b2.mp3?filename=tuesday-glitch-12278.mp3'
-];
+
 
 /**
  * Generates a valid loopable PCM silent audio Blob URL (2 seconds @ 8000Hz mono).
@@ -114,6 +132,8 @@ class AudioEngine {
     this.playSessionId = 0;
 
     this.listeners = {
+      unplayable: [],
+      resolved: [],
       timeUpdate: [],
       stateChange: [],
       ended: [],
@@ -123,6 +143,7 @@ class AudioEngine {
     };
 
     this.timer = null;
+    this._failedIds = new Set();
     this.audioCtx = null;
     this.analyser = null;
     this.sourceNode = null;
@@ -135,7 +156,8 @@ class AudioEngine {
     this._initHtmlAudioEvents();
     this._initMediaSession();
     this._initVisibilityListener();
-    this._startProgressTicker();
+    // Re-pace the ticker when the app moves between foreground and background.
+    onPowerChange(() => { if (this.timer) this._startProgressTicker(); });
   }
 
   _initHtmlAudioEvents() {
@@ -190,15 +212,7 @@ class AudioEngine {
         this.htmlAudio.src.startsWith('http') &&
         !this.htmlAudio.src.includes('localhost:')
       ) {
-        if (this._fallbackAttempts > 0) {
-          console.warn('Direct audio backup stream also failed; stopping playback cleanly.');
-          this.isPlaying = false;
-          this.isBuffering = false;
-          this._emit('stateChange', { isPlaying: false, isBuffering: false });
-          return;
-        }
-        this._fallbackAttempts = (this._fallbackAttempts || 0) + 1;
-        this._fallbackToDirectAudio(this.playSessionId);
+        this._reportUnplayable(this.playSessionId, 'This audio file could not be played.');
       }
     });
   }
@@ -423,7 +437,11 @@ class AudioEngine {
     syncNativeLockScreen(null, false, 0);
   }
 
-  async _requestWakeLock() {
+  // A music player must let the screen turn off; the Android service keeps the CPU awake
+  // (only while playing). Kept as no-ops because many call sites reference them.
+  async _requestWakeLock() {}
+
+  async _unusedScreenWakeLock() {
     if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && !this._wakeLock) {
       try {
         this._wakeLock = await navigator.wakeLock.request('screen');
@@ -584,69 +602,49 @@ class AudioEngine {
   }
 
   async handleYouTubeError(code) {
-    console.warn('YouTube playback error event code:', code, 'for track:', this.currentTrack?.title);
+    console.warn('YouTube playback error', code, 'for', this.currentTrack?.title);
+    const sessionId = this.playSessionId;
+    const track = this.currentTrack;
+    if (!track) return;
 
-    if (this.currentTrack) {
-      const badId = this.currentTrack.youtubeId;
-      clearYtCache(this.currentTrack.title, this.currentTrack.artist);
-
-      // Attempt to load alternative candidate
-      this._ytRetryCount = (this._ytRetryCount || 0) + 1;
-      if (this._ytRetryCount <= 2) {
-        try {
-          const freshId = await resolveYouTubeTrack(
-            this.currentTrack.title,
-            this.currentTrack.artist,
-            true,
-            badId,
-            this.currentTrack.duration || 0
-          );
-          if (freshId && freshId !== badId && this.ytPlayer && typeof this.ytPlayer.loadVideoById === 'function') {
-            this.currentTrack.youtubeId = freshId;
-            const cleanFreshId = String(freshId).trim();
-            this.activeMode = 'yt';
-            this.ytPlayer.loadVideoById(cleanFreshId, 0);
-            this.ytPlayer.setVolume(this.volume * 100);
-            this.ytPlayer.playVideo();
-            return;
-          }
-        } catch (_) {}
-      }
+    // 101/150: the owner blocked embedding; 100: removed; 2/5: bad id or player error.
+    // Try the next-best exact match (never a random song), at most twice.
+    if (track.youtubeId) this._failedIds.add(track.youtubeId);
+    if (this._failedIds.size <= 2 && navigator.onLine !== false) {
+      try {
+        const alt = await resolveTrack({ ...track, youtubeId: null }, { exclude: [...this._failedIds] });
+        if (this.playSessionId !== sessionId) return;
+        if (alt?.youtubeId && !this._failedIds.has(alt.youtubeId) && this.ytPlayer?.loadVideoById) {
+          track.youtubeId = alt.youtubeId;
+          this._emit('resolved', { track: { ...track } });
+          this.activeMode = 'yt';
+          this.ytPlayer.loadVideoById(alt.youtubeId, 0);
+          this.ytPlayer.setVolume(this.volume * 100);
+          this.ytPlayer.playVideo();
+          return;
+        }
+      } catch (_) {}
     }
-
-    this._ytRetryCount = 0;
-    this._fallbackToDirectAudio(this.playSessionId);
+    const reason = code === 101 || code === 150
+      ? 'The rights holder does not allow this song to play outside YouTube.'
+      : 'This song is not available to stream right now.';
+    this._reportUnplayable(sessionId, reason);
   }
 
-  _fallbackToDirectAudio(sessionId) {
+  /** Stops cleanly and lets the app decide what to do (usually skip to the next song). */
+  _reportUnplayable(sessionId, reason) {
     if (this.playSessionId !== sessionId) return;
-
-    // Force stop YouTube
     if (this.ytPlayer && typeof this.ytPlayer.stopVideo === 'function') {
       try { this.ytPlayer.stopVideo(); } catch (_) {}
     }
-
-    const idx = Math.abs((this.currentTrack?.title?.length || 0) % FALLBACK_AUDIO_POOL.length);
-    const fallbackUrl = FALLBACK_AUDIO_POOL[idx];
-
-    this.activeMode = 'html';
-    try {
-      this.htmlAudio.removeAttribute('crossorigin');
-    } catch (_) {}
-    this.htmlAudio.src = fallbackUrl;
-    this.htmlAudio.currentTime = 0;
-    this.htmlAudio.volume = this.volume;
-    this.htmlAudio.play().then(() => {
-      if (this.playSessionId === sessionId) {
-        this.isPlaying = true;
-        this.isBuffering = false;
-        this._emit('stateChange', { isPlaying: true, isBuffering: false });
-      } else {
-        this.htmlAudio.pause();
-      }
-    }).catch(err => {
-      console.warn('Fallback audio play note:', err);
-    });
+    this.isPlaying = false;
+    this.isBuffering = false;
+    this.userWantsPlay = false;
+    this.activeMode = 'idle'; // a later "play" starts a fresh attempt instead of resuming a dead stream
+    this._stopProgressTicker();
+    this._pauseSilentAudio();
+    this._emit('stateChange', { isPlaying: false, isBuffering: false });
+    this._emit('unplayable', { track: this.currentTrack, reason });
   }
 
   on(event, callback) {
@@ -693,39 +691,12 @@ class AudioEngine {
     this._playSilentAudio();
     this._stopPlaybackSources();
 
-    // Check if device is in Offline Mode or disconnected from internet
-    const isOnline = offlineStorage.isEffectivelyOnline();
+    this._failedIds = new Set();
 
-    if (!isOnline) {
-      // In Offline Mode: play from local IndexedDB offline storage
-      this.activeMode = 'html';
-      const offlineAudioUrl = await offlineStorage.getOfflineAudioUrl(track.id);
-      if (this.playSessionId !== currentSession) return;
-
-      this.htmlAudio.src = offlineAudioUrl || track.audioUrl || FALLBACK_AUDIO_POOL[0];
-      this.htmlAudio.volume = this.volume;
-      this._initWebAudio();
-      if (this.audioCtx && this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume();
-      }
-
-      try {
-        await this.htmlAudio.play();
-        if (this.playSessionId === currentSession) {
-          this.isPlaying = true;
-          this.isBuffering = false;
-          this._emit('stateChange', { isPlaying: true, isBuffering: false, isOffline: true });
-        } else {
-          this.htmlAudio.pause();
-        }
-      } catch (err) {
-        console.warn('Offline audio play note:', err);
-      }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false && !track.audioUrl) {
+      this._reportUnplayable(currentSession, 'You are offline. Connect to the internet to stream music.');
       return;
     }
-
-    // When online: auto-cache track to offline vault quietly in background
-    offlineStorage.autoCacheTrack(track).catch(() => {});
 
     // Discard any 30-second preview audio snippets (e.g. Apple previewUrl) so the full track streams
     const isSnippetPreview = track.audioUrl && (
@@ -769,20 +740,25 @@ class AudioEngine {
 
     let ytId = track.youtubeId;
 
-    // Resolve clean studio audio if missing
+    // Resolve the exact recording (strict title + artist + duration match)
     if (!ytId) {
-      ytId = await resolveYouTubeTrack(track.title, track.artist, false, null, track.duration || 0);
-      if (this.playSessionId !== currentSession) {
-        // Discard if user already switched to another track while waiting
+      let resolved = null;
+      try {
+        resolved = await resolveTrack(track);
+      } catch (err) {
+        if (this.playSessionId !== currentSession) return;
+        this._reportUnplayable(currentSession, err.message || 'Could not reach the music service.');
         return;
       }
-      if (ytId) {
-        track.youtubeId = ytId;
-      } else {
-        console.warn('Could not resolve YouTube track ID, falling back to direct audio:', track?.title);
-        this._fallbackToDirectAudio(currentSession);
+      if (this.playSessionId !== currentSession) return;
+      if (!resolved?.youtubeId) {
+        this._reportUnplayable(currentSession, `Couldn't find an exact match for "${track.title}". Use "Not the right song?" to pick it manually.`);
         return;
       }
+      ytId = resolved.youtubeId;
+      track.youtubeId = ytId;
+      if (!track.coverUrl && resolved.coverUrl) track.coverUrl = resolved.coverUrl;
+      this._emit('resolved', { track: { ...track } });
     }
 
     // Ensure YouTube player instance is ready before attempting load
@@ -796,7 +772,6 @@ class AudioEngine {
 
     if (ytId && player && typeof player.loadVideoById === 'function') {
       this.activeMode = 'yt';
-      this._ytRetryCount = 0;
       // Double check HTML audio is silent without triggering false error events
       this.htmlAudio.pause();
       try {
@@ -828,6 +803,7 @@ class AudioEngine {
   pause() {
     this.isPlaying = false;
     this.userWantsPlay = false;
+    this._stopProgressTicker();
     this._releaseWakeLock();
 
     // Unconditionally pause BOTH to guarantee silence
@@ -862,6 +838,7 @@ class AudioEngine {
     this.isPlaying = true;
     this.userWantsPlay = true;
     this._requestWakeLock();
+    this._startProgressTicker();
 
     // If activeMode is idle or neither HTML audio nor YouTube player has an active session, trigger full playTrack
     if (this.activeMode === 'idle' || (!this.htmlAudio.src && !this.ytPlayer)) {
@@ -995,8 +972,15 @@ class AudioEngine {
     return new Uint8Array(32).fill(0);
   }
 
+  /**
+   * Polls the YouTube player for position and end-of-song. Runs only while the listener
+   * wants music: every 250ms on screen, once a second in the background.
+   */
   _startProgressTicker() {
     if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    if (!this.userWantsPlay) return;
+    this._tickerMs = isBackground() ? 1000 : 250;
     this.timer = setInterval(() => {
       if (this.activeMode === 'yt' && this.ytPlayer && typeof this.ytPlayer.getCurrentTime === 'function') {
         try {
@@ -1052,7 +1036,12 @@ class AudioEngine {
           this._updateMediaSessionPosition();
         }
       }
-    }, 200);
+    }, this._tickerMs);
+  }
+
+  _stopProgressTicker() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   _initMediaSession() {

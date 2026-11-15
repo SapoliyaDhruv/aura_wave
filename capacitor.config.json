@@ -12,11 +12,9 @@
       "*.youtube.com",
       "*.ytimg.com",
       "*.googlevideo.com",
+      "*.googleusercontent.com",
       "aurawave-music.vercel.app",
-      "cdn.pixabay.com",
-      "itunes.apple.com",
-      "*.mzstatic.com"
+      "lrclib.net"
     ]
   }
 }
-

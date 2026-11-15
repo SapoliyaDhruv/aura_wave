@@ -1,12 +1,12 @@
 {
   "name": "AuraWave Music",
   "short_name": "AuraWave",
-  "description": "Next-Gen Ultra-Premium Music Streaming & Kinetic Lyrics Experience",
+  "description": "Personal music player with lyrics search and recommendations",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0a0a0f",
-  "theme_color": "#0a0a0f",
+  "background_color": "#14101b",
+  "theme_color": "#14101b",
   "icons": [
     {
       "src": "/icon-192.png",

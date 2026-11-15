@@ -1,115 +1,70 @@
-# 🌊 AuraWave Music
+# AuraWave
 
-<p align="center">
-  <strong>Next-Generation Web & Mobile Music Streaming, Smart Recommendations, and Lyrics Player</strong>
-</p>
+A personal music player for web and Android. It plays the exact song you picked, finds songs from a line of their lyrics, and builds a home page from what you actually listen to.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/React-19.3-61dafb?style=flat-square&logo=react" alt="React 19" />
-  <img src="https://img.shields.io/badge/Vite-8.3-646cff?style=flat-square&logo=vite" alt="Vite" />
-  <img src="https://img.shields.io/badge/Capacitor-8.5-119eff?style=flat-square&logo=capacitor" alt="Capacitor" />
-  <img src="https://img.shields.io/badge/Android-APK%20v1.2-3ddc84?style=flat-square&logo=android" alt="Android" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
-</p>
+## How it finds the right song
 
----
+Every song is played from **YouTube Music's official audio tracks**, matched by title, artist and duration:
 
-## 🌟 Overview
+- Search results come straight from YouTube Music, so what you tap is what plays.
+- Songs from elsewhere (Spotify imports, older library entries) go through a strict matcher (`shared/match.js`). It rejects same-named songs by other artists and versions you didn't ask for: instrumental, karaoke, slowed, lofi, sped up, 8D, jhankar, covers, live, clips.
+- If there's no confident match, the song is **skipped with a message**. It never plays something else in its place.
+- If a version is wrong anyway, open the player and tap **Not the right song?** to pick the right one. That choice is remembered.
 
-**AuraWave Music** is a high-performance, Spotify-grade music streaming application built for both modern Web and native Android. It combines word-by-word synced lyrics, dynamic acoustic vibe transition engines, authentic artist similarity networks, background playback services, and an offline download cache.
+## Lyrics search
 
----
+Type any line you remember into Search, for example "hum tere bin ab reh nahi sakte". YouTube Music matches lyrics, and the top result shows the line it matched.
 
-## ✨ Key Features
+## Recommendations
 
-### 🧠 1. Intelligent Recommendation & Endless Radio Engine
-- **Acoustic Waveform Analysis (Echo Nest Style)**: Automatically tags and evaluates track features: `energy` (low/medium/high), `mood` (romantic, heartbreak, party, hype, chill, groove), `estimatedBpm`, and `valence` to ensure smooth musical transitions (e.g., preventing abrupt jumps between club dance tracks and heartbreak ballads).
-- **Skip-Dwell Feedback Loop**: Real-time behavioral signal tracking. Skips under 5 seconds temporarily suppress the artist and penalize the vibe for that session; deep listening (>45s or >65%) boosts artist affinity.
-- **Dynamic Online Radio Ingestion**: Automatically streams 20–50 fresh tracks on the fly for any artist from global music catalogs, eliminating the "cold catalog" limit.
-- **Session Anti-Fatigue Memory**: In-memory session tracking ensures songs heard during the current listening session never repeat in the Up Next queue.
-- **Artist Similarity Network**: Deep relational cluster mapping (e.g., Sonu Nigam ↔ KK ↔ Mohit Chauhan ↔ Atif Aslam ↔ Pritam; Karan Aujla ↔ Shubh ↔ Diljit ↔ AP Dhillon).
-- **Infinite Playlist Autoplay**: When a playlist finishes, the engine calculates dominant genre and mood vectors to seamlessly transition into matching endless radio.
+`src/services/recommender.js` works entirely from your own listening:
 
-### 🎵 2. Studio Master Playback & Search Precision
-- **100+ Master Tracks Catalog**: Complete with rich metadata, high-resolution album artwork, and verified clean studio audio streams (Bollywood Romance, Heartbreak Soul, Punjabi, Desi Hip-Hop, and Global Pop).
-- **Phonetic & Alias Search Resolver**: Handles colloquial spellings and query variations (e.g., `sonio` ranks Sonu Nigam & Shreya Ghoshal's iconic *Soniyo* as #1; `shelume` resolves to Tai Verdes' *sheluvme*).
-- **Clean Stream Resolver**: Aggressively filters out karaoke, instrumental, backing tracks, and covers so playback always resolves to original vocal studio masters.
+1. Every song you touched gets a weight. Likes and full listens add to it, skips subtract, and older activity slowly fades.
+2. Your strongest songs (at most two per artist) become seeds. Each seed's YouTube Music radio provides candidates.
+3. Candidates are ranked by how many of your seeds point to them and how much you like their artists. Hidden songs, hidden artists and artists you keep skipping are filtered out.
+4. The result becomes shelves (a time-of-day mix, artist mixes, "Because you played…", Fresh finds, On repeat, Rediscover). Each song says why it's there.
 
-### 📱 3. Native Android Mobile Experience
-- **Capacitor 8.5 Bridge**: Native Android package (`com.aurawave.music`) with AndroidX Media integration.
-- **Background Audio Service**: Uninterrupted playback when screen is locked or switching between apps via `MusicPlaybackService`.
-- **Lock Screen MediaSession**: Full metadata updates with dynamic high-resolution artwork (96px to 512px) and notification controls.
-- **Offline Mode & Download Cache**: Save and play downloaded music anywhere with zero internet connectivity.
+When your queue ends, autoplay continues with similar songs, minus anything heard this session.
 
-### 🎨 4. Modern Spotify-Style UI / UX
-- **Your Library View**: Searchable, filter chips (`All`, `Playlists`, `By You`, `Downloaded`), sort controls (`Recents`, `Alphabetical`, `Song Count`), list/grid layout toggle, and pinned Liked Songs.
-- **Playlist Detail View**: 42x42 cover art, hover play states, animated 3-bar green equalizer, like hearts, and total duration stats.
-- **Word-by-Word Synced Lyrics**: Real-time karaōke-style animated lyrics with dynamic gradient highlights.
-- **Adaptive Layout**: Responsive desktop sidebar + mini player with smooth mobile drawer navigation.
+## Project layout
 
----
+```
+api/                 Vercel serverless functions (also run by the Vite dev server)
+  _lib/ytmusic.js    YouTube Music client: search, resolve, radio, artist, lyrics
+  music/*.js         /api/music/search | resolve | radio | artist | lyrics
+  spotify/playlist.js  public Spotify playlist import
+  youtube/search.js  legacy endpoint kept for older installed app builds
+shared/match.js      song matching rules, used by server and client
+src/
+  services/          audio engine, catalog (API + caching), library, recommender, lyrics
+  state/             player, router, overlays, toasts
+  views/             Home, Search, Library, Collection, Artist, Settings, Onboarding
+  components/        player UI, lyrics, queue, sheets, shared UI
+  styles/app.css     design system (colours follow the playing song's cover)
+```
 
-## 🛠️ Tech Stack
+## Develop
 
-- **Frontend**: React 19, Vite 8, Lucide React
-- **Mobile Runtime**: Capacitor Android 8.5
-- **Audio Engine**: Custom HTML5 / Web Audio / YouTube IFrame Player API hybrid engine
-- **Styling**: Modern CSS3 with hardware-accelerated animations & glassmorphism
-- **Storage**: Browser LocalStorage & IndexedDB (via Capacitor Storage & Native Bridge)
+```bash
+npm install
+npm run dev        # http://localhost:5173 (the /api routes run locally too)
+npm run build
+npm run lint
+```
 
----
+## Deploy and build Android
 
-## 🚀 Getting Started
+The Android app calls the deployed backend (`https://aurawave-music.vercel.app` by default; set `VITE_API_BASE` to change it). **Redeploy the `api/` folder to Vercel before installing a new APK**, or the app will be calling the old endpoints.
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- [npm](https://www.npmjs.com/) or [pnpm](https://pnpm.io/)
-- [Android Studio](https://developer.android.com/studio) (for Android native builds)
+```bash
+npm run build
+npx cap sync android
+cd android && ./gradlew assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```
 
-### Installation
+Set `YTM_REGION` in Vercel (default `IN`) to change which YouTube Music region the catalog comes from.
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/SapoliyaDhruv/aura_wave.git
-   cd aura_wave
-   ```
+## Your data
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Start development server**:
-   ```bash
-   npm run dev
-   ```
-   Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-4. **Build production web assets**:
-   ```bash
-   npm run build
-   ```
-
----
-
-## 📱 Building the Android APK
-
-1. **Sync web build with Android native project**:
-   ```bash
-   npx cap sync android
-   ```
-
-2. **Compile the APK via Gradle**:
-   ```bash
-   cd android
-   ./gradlew assembleDebug
-   ```
-
-   The generated APK will be available at:
-   `android/app/build/outputs/apk/debug/app-debug.apk`
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+Liked songs, playlists, history and settings are stored on the device. Use **Settings → Back up library** before reinstalling or switching phones. Backups from the previous app version can also be restored there.

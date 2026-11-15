@@ -3,31 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0a0f" />
+    <meta name="theme-color" content="#14101b" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="mobile-web-app-capable" content="yes" />
     <link rel="manifest" href="/manifest.json" />
-    <meta name="description" content="AuraWave - Premium ad-free personal music player with kinetic animated lyrics and Spotify playlist integration." />
+    <meta name="description" content="AuraWave: a personal music player with exact-match playback, lyrics search, synced lyrics and recommendations shaped by what you play." />
     
-    <title>AuraWave • Ad-Free Music & Kinetic Lyrics</title>
-
-    <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <title>AuraWave</title>
 
     <!-- Favicon & Brand Icons -->
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     
-    <!-- Ensure background playback and lock-screen unpause are never blocked by Page Visibility restrictions -->
-    <script>
-      try {
-        Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
-        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
-      } catch (_) {}
-    </script>
 
     <!-- YouTube Iframe API for ad-free music stream backing -->
     <script src="https://www.youtube.com/iframe_api"></script>

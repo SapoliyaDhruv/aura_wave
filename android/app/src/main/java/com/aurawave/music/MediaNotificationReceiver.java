@@ -26,7 +26,6 @@ public class MediaNotificationReceiver extends BroadcastReceiver {
         } else if (ACTION_STOP.equals(action)) {
             MainActivity.triggerMediaAction("pause");
             MusicPlaybackService.stop(context);
-            MainActivity.clearMediaNotification();
         } else if (ACTION_NEXT.equals(action)) {
             MainActivity.triggerMediaAction("next");
         } else if (ACTION_PREV.equals(action)) {

@@ -1,70 +1,32 @@
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
+import { handle, bad } from '../_lib/http.js';
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+// GET /api/spotify/playlist?id=<playlist id>
+// Reads a public Spotify playlist's track list from its embed page. Songs are matched
+// to exact recordings later, when played (see /api/music/resolve).
+export default handle(async ({ id }) => {
+  const playlistId = String(id || '').match(/[A-Za-z0-9]{22}/)?.[0];
+  if (!playlistId) return bad('That does not look like a Spotify playlist link.');
 
-  const { id: playlistId } = req.query || {};
-  if (!playlistId) {
-    return res.status(400).json({ error: 'Missing id parameter' });
-  }
+  const res = await fetch(`https://open.spotify.com/embed/playlist/${playlistId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 404) return { status: 404, error: 'Spotify could not find this playlist. Check that it is public.' };
+  if (!res.ok) throw new Error(`Spotify returned ${res.status}`);
 
-  try {
-    const spotifyUrl = `https://open.spotify.com/embed/playlist/${playlistId}`;
-    const fetchRes = await fetch(spotifyUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      signal: AbortSignal.timeout(6000)
-    });
+  const html = await res.text();
+  const json = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s)?.[1];
+  const entity = json ? JSON.parse(json)?.props?.pageProps?.state?.data?.entity : null;
+  if (!entity?.trackList?.length) return { status: 422, error: 'This playlist has no readable songs. Make sure it is public.' };
 
-    if (!fetchRes.ok) {
-      return res.status(fetchRes.status).json({ error: `Spotify returned status ${fetchRes.status}` });
-    }
-
-    const html = await fetchRes.text();
-    const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/);
-
-    if (nextDataMatch) {
-      const data = JSON.parse(nextDataMatch[1]);
-      const entity = data?.props?.pageProps?.state?.data?.entity;
-      const name = entity?.name || 'Spotify Playlist';
-      const cover = entity?.visualIdentity?.image?.[0]?.url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80';
-      const trackList = entity?.trackList || [];
-
-      const tracks = trackList.map((t, idx) => ({
-        id: `sp-${playlistId}-${idx}-${Date.now()}`,
-        title: t.title || 'Untitled Track',
-        artist: t.subtitle || 'Unknown Artist',
-        album: name,
-        duration: t.duration ? Math.round(t.duration / 1000) : 180,
-        coverUrl: cover,
-        themeColor: '#1DB954',
-        secondaryColor: '#3b82f6'
-      }));
-
-      return res.status(200).json({
-        id: `imported-${playlistId}`,
-        name,
-        description: `Imported from Spotify • ${tracks.length} tracks`,
-        cover,
-        isCustom: true,
-        isImported: true,
-        trackCount: tracks.length,
-        tracks
-      });
-    }
-  } catch (err) {
-    console.error('Error fetching Spotify playlist:', err);
-    return res.status(500).json({ error: err.message });
-  }
-
-  return res.status(404).json({ error: 'Playlist metadata could not be parsed' });
-}
+  return {
+    name: entity.name || 'Spotify playlist',
+    coverUrl: entity.visualIdentity?.image?.[0]?.url || '',
+    tracks: entity.trackList.map((t, i) => ({
+      id: `sp-${(t.uri || '').split(':').pop() || `${playlistId}-${i}`}`,
+      title: t.title || 'Untitled',
+      artist: t.subtitle || '',
+      duration: t.duration ? Math.round(t.duration / 1000) : 0,
+    })),
+  };
+}, { cacheSeconds: 600 });
