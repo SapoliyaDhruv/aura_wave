@@ -1,0 +1,9 @@
+# Ignore local native Android project from Vercel web deployment
+android
+node_modules
+dist
+.git
+.gradle
+*.apk
+public/AuraWave.apk
+scratch

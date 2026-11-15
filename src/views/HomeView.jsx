@@ -119,6 +119,18 @@ export default function HomeView() {
         <IconButton label="Settings" className="home__settings" onClick={() => navigate('settings')}><Settings size={21} /></IconButton>
       </header>
 
+      {!lib.taste.onboarded && (
+        <div className="home__banner" style={{ margin: '0 0 1.25rem 0', padding: '0.85rem 1.15rem', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Tune your personal sound</div>
+            <div style={{ fontSize: '0.78rem', color: 'rgba(255, 255, 255, 0.6)' }}>Pick artists to customize your daily mixes</div>
+          </div>
+          <button type="button" className="btn btn--primary btn--sm" onClick={() => navigate('onboarding')}>
+            Pick artists
+          </button>
+        </div>
+      )}
+
       {local.recent.length > 0 && <QuickGrid tracks={local.recent} />}
 
       {feed.status === 'loading' && (
@@ -128,13 +140,13 @@ export default function HomeView() {
         </div>
       )}
 
-      {feed.status === 'error' && (
+      {feed.status === 'error' && !data?.hero?.tracks?.length && (
         <EmptyState title="Recommendations didn’t load" action={<button type="button" className="btn btn--primary" onClick={() => load(true)}>Try again</button>}>
           {feed.error}
         </EmptyState>
       )}
 
-      {feed.status === 'empty' && (
+      {feed.status === 'empty' && !data?.hero?.tracks?.length && (
         <EmptyState title="Let’s find your sound" action={<button type="button" className="btn btn--primary" onClick={() => navigate('onboarding')}>Pick artists you love</button>}>
           Play or like a few songs, or pick some artists, and this page fills with mixes made for you.
         </EmptyState>

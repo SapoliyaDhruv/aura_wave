@@ -84,18 +84,38 @@ function pickSeeds(aff, count = 6, rand = Math.random) {
   return seeds;
 }
 
-/** Cold start: a top song for each artist the listener picked during setup. */
+/** Cold start: a top song for each artist the listener picked during setup (or top defaults). */
 async function seedsFromTaste(state) {
-  const names = (state.taste.artists || []).slice(0, 5);
+  let names = (state.taste.artists || []).slice(0, 5);
+  if (!names.length) {
+    const lang = (state.taste.languages && state.taste.languages[0]) || 'Hindi';
+    if (lang === 'Punjabi') {
+      names = ['Karan Aujla', 'Diljit Dosanjh', 'Shubh', 'AP Dhillon'];
+    } else if (lang === 'English') {
+      names = ['The Weeknd', 'Taylor Swift', 'Billie Eilish', 'Sabrina Carpenter'];
+    } else {
+      names = ['Arijit Singh', 'Pritam', 'KK', 'Sonu Nigam', 'Shreya Ghoshal'];
+    }
+  }
+
   const results = await Promise.allSettled(names.map((name) => catalog.artist({ name })));
-  return results
+  const seeds = results
     .filter((r) => r.status === 'fulfilled' && r.value?.songs?.length)
     .map((r) => {
       const name = r.value.name;
-      // Prefer a song where this artist is the lead credit, so the mix is clearly theirs.
       const lead = r.value.songs.find((s) => leadArtist(s.artist).toLowerCase() === name.toLowerCase()) || r.value.songs[0];
       return { track: lead, weight: 2, plays: 0, liked: false, fromTaste: name, forArtist: name.toLowerCase() };
     });
+
+  if (!seeds.length) {
+    const all = catalog.getCatalogTracks();
+    for (const name of names) {
+      const found = all.find((t) => leadArtist(t.artist).toLowerCase().includes(name.toLowerCase()));
+      if (found) seeds.push({ track: found, weight: 2, plays: 0, liked: false, fromTaste: name, forArtist: name.toLowerCase() });
+    }
+  }
+
+  return seeds;
 }
 
 // ---------- candidate scoring ----------
@@ -206,12 +226,29 @@ export async function buildFeed({ force = false } = {}) {
   const rand = rng(force ? Date.now() : dayNumber());
   let seeds = pickSeeds(aff, 6, rand);
   if (seeds.length < 3) seeds = [...seeds, ...(await seedsFromTaste(state))].slice(0, 6);
-  if (!seeds.length) return { ...local, empty: true };
+  if (!seeds.length) {
+    const defaultCatalog = catalog.getCatalogTracks().slice(0, 6);
+    seeds = defaultCatalog.map((track) => ({
+      track,
+      weight: 2,
+      plays: 0,
+      liked: false,
+      fromTaste: leadArtist(track.artist),
+      forArtist: leadArtist(track.artist).toLowerCase(),
+    }));
+  }
 
-  const radios = (await Promise.allSettled(seeds.map(async (seed) => ({ seed, tracks: await catalog.radio(seed.track) }))))
+  let radios = (await Promise.allSettled(seeds.map(async (seed) => ({ seed, tracks: await catalog.radio(seed.track) }))))
     .filter((r) => r.status === 'fulfilled' && r.value.tracks.length)
     .map((r) => r.value);
-  if (!radios.length) throw new Error('Could not load recommendations. Check your connection and try again.');
+
+  if (!radios.length) {
+    const allTracks = catalog.getCatalogTracks();
+    radios = seeds.map((seed, i) => ({
+      seed,
+      tracks: allTracks.slice(i * 8, (i + 1) * 8 + 8),
+    }));
+  }
 
   const fresh = scoreCandidates(radios, aff, state, { excludeKnown: true });
   const everything = scoreCandidates(radios, aff, state);
@@ -225,6 +262,15 @@ export async function buildFeed({ force = false } = {}) {
     heroTracks.push(withReason(d, reasonFor(d, aff)));
     if (i % 3 === 2 && favourites[f]) { heroTracks.push({ ...favourites[f].track, reason: 'One of your favourites' }); f++; }
   });
+
+  if (heroTracks.length < 5) {
+    const fallbackAll = catalog.getCatalogTracks();
+    fallbackAll.slice(0, 20).forEach((t) => {
+      if (!heroTracks.some((ht) => songKey(ht) === songKey(t))) {
+        heroTracks.push({ ...t, reason: 'Curated for you' });
+      }
+    });
+  }
 
   // Artist mixes: your top artists, each blended with the artists their radios lead to.
   const topArtists = [...aff.artists.entries()].sort((a, b) => b[1].weight - a[1].weight).slice(0, 4);
@@ -254,25 +300,39 @@ export async function buildFeed({ force = false } = {}) {
     return { id: `mix-${key}`, name: `${a.name} Mix`, subtitle: others.length ? `With ${others.join(' and ')}` : 'Your favourites and more', tracks };
   }).filter((m) => m.tracks.length >= 6);
 
+  if (mixes.length === 0) {
+    const all = catalog.getCatalogTracks();
+    const hindi = all.filter((t) => /Arijit|Pritam|KK|Atif|Sonu|Shreya|Mohit/i.test(t.artist));
+    const punjabi = all.filter((t) => /Aujla|Diljit|Shubh|Dhillon/i.test(t.artist));
+    const global = all.filter((t) => /Weeknd|Billie|Sabrina|Taylor|Styles|Joji/i.test(t.artist));
+    const indie = all.filter((t) => /Anuv|Kuhad|King|DIVINE|Stan/i.test(t.artist));
+    if (hindi.length >= 4) mixes.push({ id: 'mix-bollywood', name: 'Bollywood Romance Mix', subtitle: 'Arijit Singh, Pritam, KK and more', tracks: hindi.slice(0, 15) });
+    if (punjabi.length >= 4) mixes.push({ id: 'mix-punjabi', name: 'Punjabi Hits Mix', subtitle: 'Karan Aujla, Diljit Dosanjh, Shubh', tracks: punjabi.slice(0, 15) });
+    if (global.length >= 4) mixes.push({ id: 'mix-global', name: 'Global Top Hits Mix', subtitle: 'The Weeknd, Billie Eilish, Sabrina Carpenter', tracks: global.slice(0, 15) });
+    if (indie.length >= 4) mixes.push({ id: 'mix-indie', name: 'Indie & Chill Mix', subtitle: 'Anuv Jain, Prateek Kuhad and more', tracks: indie.slice(0, 15) });
+  }
+
   // "Because you played X": the most recent song you finished or liked.
-  const anchor = state.history.find((h) => aff.tracks.get(h.track.id)?.weight > 0.8)?.track || seeds[0].track;
-  const anchorRadio = radios.find((r) => r.seed.track.id === anchor.id)?.tracks || await catalog.radio(anchor).catch(() => []);
+  const anchor = state.history.find((h) => aff.tracks.get(h.track.id)?.weight > 0.8)?.track || seeds[0]?.track || catalog.getCatalogTracks()[0];
+  const anchorRadio = radios.find((r) => r.seed?.track?.id === anchor.id)?.tracks || await catalog.radio(anchor).catch(() => []);
   const knownKeys = new Set([...aff.tracks.values()].map((e) => songKey(e.track)));
+  const becauseCandidate = (anchorRadio || []).filter((t) => !knownKeys.has(songKey(t)) && !library.isHidden(t)).slice(0, 8)
+    .map((t) => ({ ...t, reason: `Often played after ${shortTitle(anchor.title)}` }));
   const because = {
     seed: anchor,
-    tracks: anchorRadio.filter((t) => !knownKeys.has(songKey(t)) && !library.isHidden(t)).slice(0, 8)
-      .map((t) => ({ ...t, reason: `Often played after ${shortTitle(anchor.title)}` })),
+    tracks: becauseCandidate.length > 0 ? becauseCandidate : catalog.getCatalogTracks().slice(1, 9).map((t) => ({ ...t, reason: 'Curated recommendation' })),
   };
 
+  const freshCandidates = diversify(fresh.slice(18), 1, 14).map((e) => withReason(e, reasonFor(e, aff)));
   const feed = {
     hero: { name: `${timeOfDayName()} Aura`, subtitle: 'New finds and favourites, shaped by what you play', tracks: heroTracks.slice(0, 25) },
     mixes,
     because,
-    freshFinds: diversify(fresh.slice(18), 1, 14).map((e) => withReason(e, reasonFor(e, aff))),
+    freshFinds: freshCandidates.length > 0 ? freshCandidates : catalog.getCatalogTracks().slice(10, 24).map((t) => ({ ...t, reason: 'Fresh discovery' })),
     builtAt: Date.now(),
   };
   setCached(FEED_KEY, feed);
-  return { ...feed, ...local };
+  return { ...feed, ...local, empty: false };
 }
 
 /** Shelves computed purely from local history; cheap enough to recompute on every change. */

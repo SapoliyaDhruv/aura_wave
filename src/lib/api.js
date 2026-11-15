@@ -3,12 +3,12 @@
  * Inside the Android app (capacitor/localhost origins) we call the deployed backend.
  * Set VITE_API_BASE to point the app at a different deployment.
  */
-const DEPLOYED = import.meta.env.VITE_API_BASE || 'https://aurawave-music.vercel.app';
+const DEPLOYED = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE) || 'https://aurawave-music.vercel.app';
 
 export function apiBase() {
   if (typeof window === 'undefined') return DEPLOYED;
   const { origin, port } = window.location;
-  if (import.meta.env.DEV && port) return origin; // Vite dev server runs the /api handlers itself
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV && port) return origin; // Vite dev server runs the /api handlers itself
   if (origin.startsWith('capacitor:') || /\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return DEPLOYED;
   return origin;
 }

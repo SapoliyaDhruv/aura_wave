@@ -1,7 +1,18 @@
+const memoryStore = new Map();
+
+function storage() {
+  if (typeof localStorage !== 'undefined') return localStorage;
+  return {
+    getItem: (k) => (memoryStore.has(k) ? memoryStore.get(k) : null),
+    setItem: (k, v) => memoryStore.set(k, String(v)),
+    removeItem: (k) => memoryStore.delete(k),
+  };
+}
+
 /** Safe JSON localStorage helpers (storage can be full, blocked or corrupted). */
 export function load(key, fallback) {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = storage().getItem(key);
     return raw == null ? fallback : JSON.parse(raw);
   } catch {
     return fallback;
@@ -10,7 +21,7 @@ export function load(key, fallback) {
 
 export function save(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    storage().setItem(key, JSON.stringify(value));
     return true;
   } catch (err) {
     console.warn(`Could not save ${key}:`, err);

@@ -8,7 +8,7 @@
 import { load, save } from '../lib/store.js';
 import { normalizeTrack } from './catalog.js';
 import { songKey } from '../../shared/match.js';
-import legacyCatalog from '../data/legacyCatalog.json';
+import legacyCatalog from '../data/legacyCatalog.json' with { type: 'json' };
 
 const K = {
   liked: 'aw2_liked',
