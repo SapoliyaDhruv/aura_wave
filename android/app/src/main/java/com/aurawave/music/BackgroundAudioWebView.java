@@ -8,8 +8,21 @@ import com.getcapacitor.CapacitorWebView;
 /**
  * Custom WebView that prevents Chromium from pausing HTML5 audio and YouTube video
  * playback when the phone screen is turned off (sleep), locked, or the app is minimized.
+ *
+ * BATTERY OPTIMIZED: Only overrides visibility and prevents onPause while audio is actively playing.
+ * When playback is paused or stopped, standard Android WebView lifecycle (onPause, pauseTimers,
+ * and visibility GONE) takes effect, allowing Chromium and the CPU to enter true deep sleep.
  */
 public class BackgroundAudioWebView extends CapacitorWebView {
+    private static volatile boolean playbackActive = false;
+
+    public static void setPlaybackActive(boolean active) {
+        playbackActive = active;
+    }
+
+    public static boolean isPlaybackActive() {
+        return playbackActive;
+    }
 
     public BackgroundAudioWebView(Context context) {
         super(context, null);
@@ -25,36 +38,51 @@ public class BackgroundAudioWebView extends CapacitorWebView {
 
     @Override
     protected void onWindowVisibilityChanged(int visibility) {
-        // Intercept window hidden state and force VISIBLE so Chromium never pauses media playback
-        super.onWindowVisibilityChanged(View.VISIBLE);
+        if (playbackActive) {
+            super.onWindowVisibilityChanged(View.VISIBLE);
+        } else {
+            super.onWindowVisibilityChanged(visibility);
+        }
     }
 
     @Override
     public void dispatchWindowVisibilityChanged(int visibility) {
-        // Intercept window visibility dispatch down the view tree and force VISIBLE
-        super.dispatchWindowVisibilityChanged(View.VISIBLE);
+        if (playbackActive) {
+            super.dispatchWindowVisibilityChanged(View.VISIBLE);
+        } else {
+            super.dispatchWindowVisibilityChanged(visibility);
+        }
     }
 
     @Override
     protected void onVisibilityChanged(View changedView, int visibility) {
-        // Keep view marked as VISIBLE to Chromium's RenderWidgetHostViewAndroid
-        super.onVisibilityChanged(changedView, View.VISIBLE);
+        if (playbackActive) {
+            super.onVisibilityChanged(changedView, View.VISIBLE);
+        } else {
+            super.onVisibilityChanged(changedView, visibility);
+        }
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasWindowFocus) {
-        // Always report window focus as true so background playback and track transitions are never throttled
-        super.onWindowFocusChanged(true);
+        if (playbackActive) {
+            super.onWindowFocusChanged(true);
+        } else {
+            super.onWindowFocusChanged(hasWindowFocus);
+        }
     }
 
     @Override
     public void onPause() {
-        // Crucial: standard WebView.onPause() tells Chromium to pause all media and timers.
-        // We override this to prevent background audio interruption while keeping resumeTimers active.
+        if (!playbackActive) {
+            super.onPause();
+        }
     }
 
     @Override
     public void pauseTimers() {
-        // Do NOT pause timers when app is locked/sleeping so audio pipelines and timers remain active
+        if (!playbackActive) {
+            super.pauseTimers();
+        }
     }
 }

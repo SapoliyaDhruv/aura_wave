@@ -17,12 +17,14 @@ public class MediaNotificationPlugin extends Plugin {
         long duration = call.getInt("duration", 0);
         long position = call.getInt("position", 0);
         boolean isPlaying = Boolean.TRUE.equals(call.getBoolean("isPlaying", false));
+        BackgroundAudioWebView.setPlaybackActive(isPlaying);
         MusicPlaybackService.startOrUpdate(getContext(), title, artist, coverUrl, duration, position, isPlaying);
         call.resolve();
     }
 
     @PluginMethod
     public void clear(PluginCall call) {
+        BackgroundAudioWebView.setPlaybackActive(false);
         MusicPlaybackService.stop(getContext());
         call.resolve();
     }

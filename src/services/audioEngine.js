@@ -423,6 +423,10 @@ class AudioEngine {
     this.htmlAudio.src = '';
     this._pauseSilentAudio();
 
+    if (this.audioCtx && this.audioCtx.state === 'running') {
+      try { this.audioCtx.suspend(); } catch (_) {}
+    }
+
     // 2. Force stop YouTube Player
     if (this.ytPlayer && typeof this.ytPlayer.stopVideo === 'function') {
       try {
@@ -821,6 +825,10 @@ class AudioEngine {
     this.htmlAudio.pause();
     this._pauseSilentAudio();
 
+    if (this.audioCtx && this.audioCtx.state === 'running') {
+      try { this.audioCtx.suspend(); } catch (_) {}
+    }
+
     if (this.ytPlayer && typeof this.ytPlayer.pauseVideo === 'function') {
       try {
         this.ytPlayer.pauseVideo();
@@ -995,7 +1003,7 @@ class AudioEngine {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (!this.userWantsPlay) return;
-    this._tickerMs = isBackground() ? 1000 : 250;
+    this._tickerMs = isBackground() ? 2500 : 250;
     this.timer = setInterval(() => {
       if (this.activeMode === 'yt' && this.ytPlayer && typeof this.ytPlayer.getCurrentTime === 'function') {
         try {
@@ -1038,7 +1046,8 @@ class AudioEngine {
             return;
           }
 
-          if (now - (this._lastPositionSyncTime || 0) > 1000) {
+          const syncInterval = isBackground() ? 5000 : 1000;
+          if (now - (this._lastPositionSyncTime || 0) > syncInterval) {
             this._lastPositionSyncTime = now;
             this._updateMediaSessionPosition();
           }
@@ -1046,7 +1055,8 @@ class AudioEngine {
         } catch (_) {}
       } else if (this.activeMode === 'html') {
         const now = Date.now();
-        if (now - (this._lastPositionSyncTime || 0) > 1000) {
+        const syncInterval = isBackground() ? 5000 : 1000;
+        if (now - (this._lastPositionSyncTime || 0) > syncInterval) {
           this._lastPositionSyncTime = now;
           this._updateMediaSessionPosition();
         }

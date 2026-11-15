@@ -59,7 +59,7 @@ public class MusicPlaybackService extends Service {
     public static final int NOTIFICATION_ID = 2001;
 
     /** Wake lock is renewed on every update while playing; this caps it if updates ever stop. */
-    private static final long WAKE_LOCK_TIMEOUT_MS = 20 * 60 * 1000L;
+    private static final long WAKE_LOCK_TIMEOUT_MS = 5 * 60 * 1000L;
 
     private MediaSessionCompat mediaSession;
     private PowerManager.WakeLock wakeLock;
@@ -220,6 +220,7 @@ public class MusicPlaybackService extends Service {
 
     private void applyPlaybackState(boolean playing) {
         isPlaying = playing;
+        BackgroundAudioWebView.setPlaybackActive(playing);
         if (playing) {
             requestFocus();
             acquireWakeLock();
@@ -297,6 +298,7 @@ public class MusicPlaybackService extends Service {
 
     private void shutdown() {
         isPlaying = false;
+        BackgroundAudioWebView.setPlaybackActive(false);
         pausedForTransientLoss = false;
         releaseWakeLock();
         abandonFocus();
