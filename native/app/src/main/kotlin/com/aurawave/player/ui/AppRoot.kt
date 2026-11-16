@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
@@ -36,6 +37,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.innertube.ArtistRef
 import com.aurawave.player.AppGraph
 import com.aurawave.player.playback.PlayerConnection
@@ -57,77 +60,86 @@ import com.aurawave.player.playback.PlayerConnection
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Rounded.Home),
     Search("Search", Icons.Rounded.Search),
+    Library("Library", Icons.Rounded.LibraryMusic),
 }
 
 @Composable
 fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     val aura = rememberAura(player.current?.mediaMetadata?.artworkUri?.toString())
+    val likedIds by graph.library.likedIds.collectAsStateWithLifecycle()
     AuraTheme(aura) {
-        var tab by rememberSaveable { mutableStateOf(Tab.Home) }
-        var artist by remember { mutableStateOf<ArtistRef?>(null) }
-        var nowPlayingOpen by rememberSaveable { mutableStateOf(false) }
-        val scope = rememberCoroutineScope()
-        val search = remember { SearchState(graph.catalog, scope) }
-        val snackbar = remember { SnackbarHostState() }
+        CompositionLocalProvider(
+            LocalLikedIds provides likedIds,
+            LocalLibrary provides graph.library,
+            LocalLyrics provides graph.lyrics,
+        ) {
+            var tab by rememberSaveable { mutableStateOf(Tab.Home) }
+            var artist by remember { mutableStateOf<ArtistRef?>(null) }
+            var nowPlayingOpen by rememberSaveable { mutableStateOf(false) }
+            val scope = rememberCoroutineScope()
+            val search = remember { SearchState(graph.catalog, scope) }
+            val snackbar = remember { SnackbarHostState() }
 
-        LaunchedEffect(player.error) {
-            val message = player.error ?: return@LaunchedEffect
-            player.clearError()
-            snackbar.showSnackbar(message)
-        }
-
-        BackHandler(enabled = nowPlayingOpen || artist != null || tab != Tab.Home) {
-            when {
-                nowPlayingOpen -> nowPlayingOpen = false
-                artist != null -> artist = null
-                else -> tab = Tab.Home
+            LaunchedEffect(player.error) {
+                val message = player.error ?: return@LaunchedEffect
+                player.clearError()
+                snackbar.showSnackbar(message)
             }
-        }
 
-        Box(Modifier.fillMaxSize().background(Palette.Ink)) {
-            Scaffold(
-                containerColor = Palette.Ink,
-                snackbarHost = { SnackbarHost(snackbar) },
-                bottomBar = {
-                    Column {
-                        if (player.current != null) MiniPlayer(player, onOpen = { nowPlayingOpen = true })
-                        NavigationBar(containerColor = Palette.Dusk) {
-                            Tab.entries.forEach { t ->
-                                NavigationBarItem(
-                                    selected = tab == t && artist == null,
-                                    onClick = { tab = t; artist = null },
-                                    icon = { Icon(t.icon, contentDescription = null) },
-                                    label = { Text(t.label) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = Palette.OnAura,
-                                        selectedTextColor = MaterialTheme.colorScheme.primary,
-                                        indicatorColor = MaterialTheme.colorScheme.primary,
-                                        unselectedIconColor = Palette.Haze,
-                                        unselectedTextColor = Palette.Haze,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                },
-            ) { padding ->
-                Box(Modifier.padding(padding).fillMaxSize()) {
-                    val openArtist = { ref: ArtistRef -> artist = ref }
-                    val shown = artist
-                    when {
-                        shown != null -> ArtistScreen(graph, player, shown, onBack = { artist = null })
-                        tab == Tab.Home -> HomeScreen(graph, player, onOpenSearch = { tab = Tab.Search })
-                        else -> SearchScreen(search, player, onOpenArtist = openArtist)
-                    }
+            BackHandler(enabled = nowPlayingOpen || artist != null || tab != Tab.Home) {
+                when {
+                    nowPlayingOpen -> nowPlayingOpen = false
+                    artist != null -> artist = null
+                    else -> tab = Tab.Home
                 }
             }
 
-            AnimatedVisibility(
-                visible = nowPlayingOpen && player.current != null,
-                enter = slideInVertically { it } + fadeIn(),
-                exit = slideOutVertically { it } + fadeOut(),
-            ) {
-                NowPlayingScreen(player, onClose = { nowPlayingOpen = false })
+            Box(Modifier.fillMaxSize().background(Palette.Ink)) {
+                Scaffold(
+                    containerColor = Palette.Ink,
+                    snackbarHost = { SnackbarHost(snackbar) },
+                    bottomBar = {
+                        Column {
+                            if (player.current != null) MiniPlayer(player, onOpen = { nowPlayingOpen = true })
+                            NavigationBar(containerColor = Palette.Dusk) {
+                                Tab.entries.forEach { t ->
+                                    NavigationBarItem(
+                                        selected = tab == t && artist == null,
+                                        onClick = { tab = t; artist = null },
+                                        icon = { Icon(t.icon, contentDescription = null) },
+                                        label = { Text(t.label) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = Palette.OnAura,
+                                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                                            indicatorColor = MaterialTheme.colorScheme.primary,
+                                            unselectedIconColor = Palette.Haze,
+                                            unselectedTextColor = Palette.Haze,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    },
+                ) { padding ->
+                    Box(Modifier.padding(padding).fillMaxSize()) {
+                        val openArtist = { ref: ArtistRef -> artist = ref }
+                        val shown = artist
+                        when {
+                            shown != null -> ArtistScreen(graph, player, shown, onBack = { artist = null })
+                            tab == Tab.Home -> HomeScreen(graph, player, onOpenSearch = { tab = Tab.Search })
+                            tab == Tab.Search -> SearchScreen(search, player, onOpenArtist = openArtist)
+                            else -> LibraryScreen(graph, player)
+                        }
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = nowPlayingOpen && player.current != null,
+                    enter = slideInVertically { it } + fadeIn(),
+                    exit = slideOutVertically { it } + fadeOut(),
+                ) {
+                    NowPlayingScreen(player, onClose = { nowPlayingOpen = false })
+                }
             }
         }
     }

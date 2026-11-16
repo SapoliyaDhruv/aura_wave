@@ -26,6 +26,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,8 +46,15 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.aurawave.innertube.InnerTube
 import com.aurawave.innertube.Track
+import com.aurawave.player.data.Library
+import com.aurawave.player.data.LyricsStore
 import com.aurawave.player.playback.PlayerConnection
 import kotlinx.coroutines.delay
+
+/** Ids of the listener's liked songs, so any row can show whether it is liked. */
+val LocalLikedIds = compositionLocalOf<Set<String>> { emptySet() }
+val LocalLibrary = staticCompositionLocalOf<Library> { error("Library is provided by AppRoot") }
+val LocalLyrics = staticCompositionLocalOf<LyricsStore> { error("LyricsStore is provided by AppRoot") }
 
 fun formatTime(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)
@@ -84,6 +93,8 @@ fun TrackRow(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val library = LocalLibrary.current
+    val liked = track.videoId in LocalLikedIds.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -117,6 +128,10 @@ fun TrackRow(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("Play next") }, onClick = { menuOpen = false; onPlayNext() })
                 DropdownMenuItem(text = { Text("Add to queue") }, onClick = { menuOpen = false; onAddToQueue() })
+                DropdownMenuItem(
+                    text = { Text(if (liked) "Remove from Liked songs" else "Like") },
+                    onClick = { menuOpen = false; library.setLiked(track, !liked) },
+                )
             }
         }
     }
@@ -157,15 +172,15 @@ fun MessageBox(title: String, body: String, action: String? = null, onAction: ()
     }
 }
 
-/** The playback position, re-read twice a second while music plays and whenever it jumps. */
+/** The playback position, re-read every [intervalMs] while music plays and whenever it jumps. */
 @Composable
-fun rememberPositionMs(player: PlayerConnection): Long {
+fun rememberPositionMs(player: PlayerConnection, intervalMs: Long = 500): Long {
     var position by remember { mutableLongStateOf(player.positionMs) }
     LaunchedEffect(player.playing, player.buffering, player.positionTick, player.current?.mediaId) {
         while (true) {
             position = player.positionMs
             if (!player.playing) break
-            delay(500)
+            delay(intervalMs)
         }
     }
     return position

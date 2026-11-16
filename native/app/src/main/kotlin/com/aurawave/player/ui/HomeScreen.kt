@@ -42,7 +42,8 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 
 @Composable
 fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Unit) {
-    val recent by graph.recent.tracks.collectAsStateWithLifecycle()
+    val loaded by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
+    val recent = loaded ?: return // still reading the library: draw nothing rather than flash the empty state
     if (recent.isEmpty()) {
         MessageBox(
             title = "Start with a song you love",

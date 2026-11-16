@@ -67,6 +67,16 @@ class LiveYouTubeTest {
     }
 
     @Test
+    fun syncedLyricsFromLrclib() = runBlocking {
+        val song = tube.searchSongs("kesariya arijit singh brahmastra").first()
+        val lyrics = Lrclib(http).find(song)
+        println("lrclib for ${song.title}: synced=${lyrics?.isSynced}, ${lyrics?.lines?.size} lines, first: ${lyrics?.lines?.firstOrNull()}")
+        assertNotNull(lyrics)
+        assertTrue(lyrics.isSynced && lyrics.lines.size > 10)
+        assertTrue(lyrics.lines.zipWithNext().all { (a, b) -> a.timeMs <= b.timeMs })
+    }
+
+    @Test
     fun audioStreamIsPlayable() = runBlocking {
         val seed = tube.searchSongs("tum hi ho arijit singh").first()
         val resolver = StreamResolver(http)

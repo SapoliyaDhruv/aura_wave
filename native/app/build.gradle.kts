@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -47,6 +48,11 @@ kotlin {
     jvmToolchain(17)
 }
 
+ksp {
+    // The database layout of every released version is kept, so upgrades can migrate people's libraries.
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(project(":innertube"))
     coreLibraryDesugaring(libs.desugar)
@@ -71,4 +77,7 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.coil.compose)
     implementation(libs.coil.okhttp)
+
+    implementation(libs.room.runtime)
+    ksp(libs.room.compiler)
 }

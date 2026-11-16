@@ -9,8 +9,16 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import com.aurawave.innertube.InnerTube
 import com.aurawave.innertube.StreamResolver
+import androidx.room.Room
+import com.aurawave.innertube.Lrclib
 import com.aurawave.player.data.Catalog
-import com.aurawave.player.data.RecentStore
+import com.aurawave.player.data.Library
+import com.aurawave.player.data.ListenLog
+import com.aurawave.player.data.LyricsStore
+import com.aurawave.player.data.db.AuraDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import com.aurawave.player.playback.StreamUrlCache
 import okhttp3.OkHttpClient
 import java.io.File
@@ -34,7 +42,16 @@ class AppGraph(context: Context) {
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    val catalog = Catalog(InnerTube(http))
+    /** For work that must finish even if the screen or the player goes away (saving to the library). */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val tube = InnerTube(http)
+    val catalog = Catalog(tube)
+    val lyrics = LyricsStore(Lrclib(http), tube)
+
+    private val database = Room.databaseBuilder(context, AuraDatabase::class.java, "aurawave.db").build()
+    val library = Library(database.library(), scope)
+    val listenLog = ListenLog(library, scope)
 
     /** Audio-only stream URLs, resolved on this device and reused until they expire. */
     val streamUrls = StreamUrlCache(StreamResolver(http))
@@ -47,8 +64,6 @@ class AppGraph(context: Context) {
             StandaloneDatabaseProvider(context),
         )
     }
-
-    val recent = RecentStore(File(context.filesDir, "recent.json"))
 
     private companion object {
         const val MEDIA_CACHE_BYTES = 512L * 1024 * 1024

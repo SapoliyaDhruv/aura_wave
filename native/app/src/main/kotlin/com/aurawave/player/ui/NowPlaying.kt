@@ -22,7 +22,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
@@ -47,6 +50,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import com.aurawave.player.playback.PlayerConnection
+import com.aurawave.player.playback.toTrack
 
 @Composable
 fun NowPlayingScreen(player: PlayerConnection, onClose: () -> Unit) {
@@ -64,60 +69,84 @@ fun NowPlayingScreen(player: PlayerConnection, onClose: () -> Unit) {
     val meta = item.mediaMetadata
     val aura = LocalAura.current
     var queueOpen by remember { mutableStateOf(false) }
+    var lyricsOpen by rememberSaveable { mutableStateOf(false) }
+    val library = LocalLibrary.current
+    val liked = item.mediaId in LocalLikedIds.current
 
     // This screen is drawn over the app, outside its Scaffold, so it sets its own text and icon colour.
     CompositionLocalProvider(LocalContentColor provides Palette.Moon) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(aura.deep, Palette.Ink)))
-            // Swallow taps so they never reach the screen underneath.
-            .pointerInput(Unit) { detectTapGestures { } }
-            .systemBarsPadding()
-            .padding(horizontal = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Close player", modifier = Modifier.size(30.dp)) }
-            Text(
-                "Now playing",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-            )
-            IconButton(onClick = { queueOpen = true }) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Up next") }
-        }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(aura.deep, Palette.Ink)))
+                // Swallow taps so they never reach the screen underneath.
+                .pointerInput(Unit) { detectTapGestures { } }
+                .systemBarsPadding()
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onClose) { Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Close player", modifier = Modifier.size(30.dp)) }
+                Text(
+                    "Now playing",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                IconButton(onClick = { lyricsOpen = !lyricsOpen }) {
+                    Icon(
+                        Icons.Rounded.Lyrics,
+                        contentDescription = if (lyricsOpen) "Show cover" else "Show lyrics",
+                        tint = if (lyricsOpen) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
+                }
+                IconButton(onClick = { queueOpen = true }) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Up next") }
+            }
 
-        // The cover takes whatever height is left, so the controls never fall off small screens.
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Artwork(meta.artworkUri?.toString(), minOf(maxWidth, maxHeight), corner = 16.dp)
-        }
+            // The cover (or the lyrics) takes whatever height is left, so the controls never fall off small screens.
+            if (lyricsOpen) {
+                LyricsPanel(player, Modifier.weight(1f).fillMaxWidth())
+            } else {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Artwork(meta.artworkUri?.toString(), minOf(maxWidth, maxHeight), corner = 16.dp)
+                }
+            }
 
-        Spacer(Modifier.height(24.dp))
-        Column(Modifier.fillMaxWidth()) {
-            Text(
-                meta.title?.toString().orEmpty(),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                meta.artist?.toString().orEmpty(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+            Spacer(Modifier.height(24.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        meta.title?.toString().orEmpty(),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        meta.artist?.toString().orEmpty(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(onClick = { library.setLiked(item.toTrack(), !liked) }) {
+                    Icon(
+                        if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (liked) "Remove from Liked songs" else "Like",
+                        tint = if (liked) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+            }
 
-        Spacer(Modifier.height(12.dp))
-        SeekBar(player)
-        Spacer(Modifier.height(4.dp))
-        Transport(player)
-        Spacer(Modifier.height(28.dp))
-    }
+            Spacer(Modifier.height(12.dp))
+            SeekBar(player)
+            Spacer(Modifier.height(4.dp))
+            Transport(player)
+            Spacer(Modifier.height(28.dp))
+        }
     }
 
     if (queueOpen) QueueSheet(player, onDismiss = { queueOpen = false })

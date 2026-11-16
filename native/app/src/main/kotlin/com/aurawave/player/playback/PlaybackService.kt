@@ -82,6 +82,7 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onDestroy() {
+        graph.listenLog.songEnded()
         scope.cancel()
         session?.release()
         session = null
@@ -101,11 +102,16 @@ class PlaybackService : MediaSessionService() {
 
     private val playerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            mediaItem ?: return
+            if (mediaItem == null) {
+                graph.listenLog.songEnded() // the queue was cleared
+                return
+            }
             heard += mediaItem.mediaId
-            graph.recent.record(mediaItem.toTrack())
+            graph.listenLog.songStarted(mediaItem.toTrack(), player.isPlaying)
             extendQueueIfLow()
         }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) = graph.listenLog.playingChanged(isPlaying)
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY) consecutiveFailures = 0
