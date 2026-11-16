@@ -70,7 +70,9 @@ class PlayerConnection(private val context: Context) {
         }
 
         override fun onPlayerError(e: PlaybackException) {
-            error = describe(e)
+            // A music video that will not play is put aside and its song carries on (see PlaybackService.moveOn).
+            val watchingVideo = controller?.currentMediaItem?.video != null
+            error = if (watchingVideo && !e.isOffline()) "This video can't be played here. Playing the song instead." else describe(e)
         }
     }
 
@@ -102,15 +104,21 @@ class PlayerConnection(private val context: Context) {
         buffering = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
         shuffle = player.shuffleModeEnabled
         repeatMode = player.repeatMode
-        durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+        // Before the player has opened the song (the app just started, with the last song waiting),
+        // it does not know the length; the catalogue's figure keeps the progress line where it was.
+        durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+            ?: (current?.toTrack()?.durationSec ?: 0) * 1000L
         if (timelineChanged) queue = List(player.mediaItemCount) { player.getMediaItemAt(it) }
     }
 
+    private fun PlaybackException.isOffline(): Boolean = !isUnplayable() && (
+        errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+        )
+
     private fun describe(e: PlaybackException): String = when {
         e.isUnplayable() -> "This song can't be played right now. Skipping it."
-        e.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-            e.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
-            "No connection. Music resumes when you're back online and press Play."
+        e.isOffline() -> "No connection. Music resumes when you're back online and press Play."
         else -> "This song stopped unexpectedly. Trying the next one."
     }
 
@@ -175,6 +183,51 @@ class PlayerConnection(private val context: Context) {
         if (positionMs > 0) c.seekTo(index, positionMs)
         c.prepare()
         if (wasPlaying || positionMs == 0L) c.play()
+    }
+
+    /**
+     * The Song/Video switch: streams the playing song from its music video [videoId] (or from
+     * the song's own recording again, when null), carrying on from the same place. The queue
+     * still holds the song, so nothing else about it changes.
+     */
+    fun streamVideo(videoId: String?, lengthMs: Long = 0) {
+        val c = controller ?: return
+        val item = c.currentMediaItem ?: return
+        if (item.video == videoId) return
+        val index = c.currentMediaItemIndex
+        // A video is often cut longer or shorter than its song. A place past the end of the
+        // recording being switched to ([lengthMs], when known) would end the song on the spot,
+        // so from there it starts over instead.
+        val position = c.currentPosition.let { if (lengthMs > 0 && it > lengthMs - END_MARGIN_MS) 0L else it }
+        c.replaceMediaItem(index, item.withVideo(videoId))
+        c.seekTo(index, position)
+        c.prepare()
+    }
+
+    /** What was playing when the listener stopped everything, so it can be put back. */
+    class Stopped(val items: List<MediaItem>, val index: Int, val positionMs: Long, val wasPlaying: Boolean)
+
+    /** Stops the music and empties the queue, which also takes the mini player away. Null when nothing was queued. */
+    fun stopAll(): Stopped? {
+        val c = controller ?: return null
+        if (c.mediaItemCount == 0) return null
+        val stopped = Stopped(List(c.mediaItemCount) { c.getMediaItemAt(it) }, c.currentMediaItemIndex, c.currentPosition, c.playWhenReady)
+        c.pause()
+        c.clearMediaItems()
+        return stopped
+    }
+
+    /** Undoes [stopAll]: the same queue, at the same place. */
+    fun restore(stopped: Stopped) {
+        val c = controller ?: return
+        error = null
+        c.setMediaItems(stopped.items, stopped.index, stopped.positionMs)
+        c.prepare()
+        if (stopped.wasPlaying) c.play()
+    }
+
+    private companion object {
+        const val END_MARGIN_MS = 8_000L
     }
 
     fun togglePlay() {

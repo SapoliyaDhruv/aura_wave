@@ -16,6 +16,14 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.MutableLongState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
@@ -183,8 +191,9 @@ fun LikeButton(liked: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifi
 val LocalIsPlaying = compositionLocalOf { false }
 
 /**
- * The seek bar. The part already played is a wave that flows while the music plays and
- * settles into a straight line when it pauses; the rest is a quiet line. Drag or tap to seek.
+ * The seek bar, in the manner of One UI's media player: the part already played is one
+ * clean wave that rolls slowly while the music plays and rests, lower and still, when it
+ * pauses; the rest is a quiet straight line. Drag or tap to seek.
  *
  * It redraws itself on every frame while playing, and nothing around it: the wave's
  * movement and the position are read only while drawing.
@@ -200,23 +209,13 @@ fun WaveSeekBar(
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val phase = remember { mutableFloatStateOf(0f) }
-    val live = remember { mutableLongStateOf(positionMs) }
-    val height = animateFloatAsState(if (playing) 1f else 0f, tween(500), label = "waveHeight")
+    val flow = rememberWaveFlow(playing, livePositionMs, positionMs)
     var dragFraction by remember { mutableStateOf<Float?>(null) }
+    val dragging = dragFraction != null
+    val thumb = animateFloatAsState(if (dragging) 1.4f else 1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium), label = "thumb")
     val enabled = durationMs > 0
     val quiet = Palette.Moon.copy(alpha = 0.22f)
-
-    LaunchedEffect(playing) {
-        if (!playing) return@LaunchedEffect
-        var last = withFrameNanos { it }
-        while (true) {
-            val now = withFrameNanos { it }
-            phase.floatValue = (phase.floatValue + (now - last) / 1e9f * WAVE_TURNS_PER_SECOND * TWO_PI) % TWO_PI
-            live.longValue = livePositionMs()
-            last = now
-        }
-    }
+    val path = remember { Path() }
 
     Canvas(
         modifier
@@ -250,40 +249,129 @@ fun WaveSeekBar(
                 )
             },
     ) {
-        val inset = THUMB_RADIUS.toPx()
+        val inset = THUMB_RADIUS.toPx() * 1.4f
         val width = size.width - inset * 2
         val mid = size.height / 2
-        val position = if (playing) live.longValue else positionMs
+        val position = if (playing) flow.live.longValue else positionMs
         val fraction = dragFraction ?: if (enabled) (position.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
         val end = inset + width * fraction
+        val stroke = 4.dp.toPx()
 
         // What is left to play.
-        drawLine(quiet, Offset(end, mid), Offset(inset + width, mid), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-
-        // What has played: a wave, flattening towards the thumb so the two meet on the line.
-        val amplitude = WAVE_HEIGHT.toPx() * height.value
-        val length = WAVE_LENGTH.toPx()
-        val taper = 14.dp.toPx()
-        val path = Path()
-        path.moveTo(inset, mid)
-        var x = inset
-        while (x < end) {
-            val ease = ((end - x) / taper).coerceIn(0f, 1f) * ((x - inset) / taper).coerceIn(0f, 1f)
-            path.lineTo(x, mid + sin((x / length) * TWO_PI - phase.floatValue) * amplitude * ease)
-            x += 2f
-        }
-        path.lineTo(end, mid)
-        drawPath(path, color, style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-
-        drawCircle(color, radius = if (dragFraction != null) inset * 1.25f else inset, center = Offset(end, mid))
+        drawLine(quiet, Offset(end, mid), Offset(inset + width, mid), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawWave(path, inset, end, mid, flow.phase.floatValue, 3.5.dp.toPx() * flow.height.value, 30.dp.toPx(), stroke, color)
+        drawCircle(color, radius = THUMB_RADIUS.toPx() * thumb.value, center = Offset(end, mid))
     }
 }
 
-private val THUMB_RADIUS = 7.dp
-private val WAVE_HEIGHT = 4.5.dp
-private val WAVE_LENGTH = 30.dp
-private const val WAVE_TURNS_PER_SECOND = 0.9f
+/**
+ * The same wave, small, for the mini player: no thumb, nothing to touch, just the song's
+ * progress along the lower edge.
+ */
+@Composable
+fun WaveProgress(
+    positionMs: Long,
+    durationMs: Long,
+    playing: Boolean,
+    color: Color,
+    livePositionMs: () -> Long,
+    modifier: Modifier = Modifier,
+) {
+    val flow = rememberWaveFlow(playing, livePositionMs, positionMs)
+    val quiet = Palette.Moon.copy(alpha = 0.14f)
+    val path = remember { Path() }
+    Canvas(modifier.fillMaxWidth().height(10.dp)) {
+        val edge = 2.dp.toPx()
+        val mid = size.height / 2
+        val position = if (playing) flow.live.longValue else positionMs
+        val fraction = if (durationMs > 0) (position.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        val end = edge + (size.width - edge * 2) * fraction
+        val stroke = 2.5.dp.toPx()
+        drawLine(quiet, Offset(end, mid), Offset(size.width - edge, mid), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawWave(path, edge, end, mid, flow.phase.floatValue, 2.dp.toPx() * flow.height.value, 20.dp.toPx(), stroke, color)
+    }
+}
+
+/** What moves a wave: how far it has rolled, how tall it stands, and where the song is on this frame. */
+private class WaveFlow(val phase: MutableFloatState, val live: MutableLongState, val height: State<Float>)
+
+@Composable
+private fun rememberWaveFlow(playing: Boolean, livePositionMs: () -> Long, positionMs: Long): WaveFlow {
+    val phase = remember { mutableFloatStateOf(0f) }
+    val live = remember { mutableLongStateOf(positionMs) }
+    // Paused, the wave stays a wave, only lower and still: a flat line reads as nothing playing at all.
+    val height = animateFloatAsState(if (playing) 1f else WAVE_AT_REST, spring(dampingRatio = 0.8f, stiffness = 90f), label = "waveHeight")
+    val position = rememberUpdatedState(livePositionMs)
+    LaunchedEffect(playing) {
+        if (!playing) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            phase.floatValue = (phase.floatValue + (now - last) / 1e9f * WAVE_TURNS_PER_SECOND * TWO_PI) % TWO_PI
+            live.longValue = position.value()
+            last = now
+        }
+    }
+    return remember { WaveFlow(phase, live, height) }
+}
+
+/**
+ * Draws one even sine from [start] to [end] along [mid], rolling towards the end. It
+ * eases onto the line over its last half wavelength, so it meets the thumb (or the quiet
+ * line) without a step.
+ */
+private fun DrawScope.drawWave(
+    path: Path,
+    start: Float,
+    end: Float,
+    mid: Float,
+    phase: Float,
+    amplitude: Float,
+    length: Float,
+    stroke: Float,
+    color: Color,
+) {
+    if (end - start < 1f) return
+    path.rewind()
+    path.moveTo(start, mid)
+    val settle = length * 0.5f
+    var x = start
+    while (x < end) {
+        val ease = ((end - x) / settle).coerceIn(0f, 1f) * ((x - start) / (settle * 0.5f)).coerceIn(0f, 1f)
+        path.lineTo(x, mid + sin((x - start) / length * TWO_PI - phase) * amplitude * ease)
+        x += 2f
+    }
+    path.lineTo(end, mid)
+    drawPath(path, color, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+}
+
+private val THUMB_RADIUS = 6.5.dp
+
+/** How tall the wave stands while paused, as a share of its playing height. */
+private const val WAVE_AT_REST = 0.45f
+private const val WAVE_TURNS_PER_SECOND = 0.45f
 private const val TWO_PI = (2 * Math.PI).toFloat()
+
+/**
+ * A tile or card that gives a little under a finger and springs back, so a press is felt
+ * before the page changes.
+ */
+@Composable
+fun Modifier.pressable(onClickLabel: String? = null, onClick: () -> Unit): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale = animateFloatAsState(
+        if (pressed) 0.96f else 1f,
+        spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium),
+        label = "press",
+    )
+    return this
+        .graphicsLayer {
+            scaleX = scale.value
+            scaleY = scale.value
+        }
+        .clickable(interactionSource = interaction, indication = null, onClickLabel = onClickLabel, onClick = onClick)
+}
 
 /**
  * Three bars that rise and fall, drawn over the cover of the song that is on. They move

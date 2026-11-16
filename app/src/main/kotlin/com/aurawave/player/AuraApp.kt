@@ -1,5 +1,7 @@
 package com.aurawave.player
 
+import com.aurawave.player.ui.Backdrop
+import com.aurawave.player.ui.Palette
 import android.app.Application
 import android.content.Context
 import androidx.annotation.OptIn
@@ -48,6 +50,7 @@ class AuraApp : Application() {
     override fun onCreate() {
         super.onCreate()
         graph = AppGraph(this)
+        Palette.backdrop = Backdrop.named(graph.settings.themeBackdrop.value)
     }
 }
 

@@ -1,8 +1,23 @@
 package com.aurawave.player.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.rotate
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -94,6 +109,9 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             AccountSection(graph, onSignIn)
 
+            SettingsGroup("Look and feel")
+            LookSettings(graph)
+
             SettingsGroup("Playback")
             SwitchSetting(
                 title = "Autoplay",
@@ -120,119 +138,125 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             QualitySetting("On Wi-Fi", settings.wifiQuality)
             QualitySetting("On mobile data", settings.mobileQuality)
 
-            SettingsGroup("Downloads")
-            val wifiOnly by settings.downloadWifiOnly.flow.collectAsStateWithLifecycle()
-            val autoLiked by settings.autoDownloadLiked.flow.collectAsStateWithLifecycle()
-            val limitMb by settings.downloadLimitMb.flow.collectAsStateWithLifecycle()
-            val used by graph.downloads.bytesUsed.collectAsStateWithLifecycle()
-            var confirmRemoveAll by remember { mutableStateOf(false) }
-            SwitchSetting(
-                title = "Download on Wi-Fi only",
-                body = "Downloads wait until the phone is on Wi-Fi",
-                checked = wifiOnly,
-                onChange = { settings.downloadWifiOnly.value = it },
-            )
-            SwitchSetting(
-                title = "Download liked songs",
-                body = "Every song you like is saved on the phone for offline play",
-                checked = autoLiked,
-                onChange = { settings.autoDownloadLiked.value = it },
-            )
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Text("Storage limit", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "Using ${com.aurawave.player.playback.Downloads.formatSize(used)}" +
-                        if (limitMb > 0) " of ${com.aurawave.player.playback.Downloads.formatSize(limitMb * 1024L * 1024)}" else "",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // Below: things set up once and then left alone. Each opens when its title is tapped.
+            FoldedGroup("Downloads") {
+                val wifiOnly by settings.downloadWifiOnly.flow.collectAsStateWithLifecycle()
+                val autoLiked by settings.autoDownloadLiked.flow.collectAsStateWithLifecycle()
+                val limitMb by settings.downloadLimitMb.flow.collectAsStateWithLifecycle()
+                val used by graph.downloads.bytesUsed.collectAsStateWithLifecycle()
+                var confirmRemoveAll by remember { mutableStateOf(false) }
+                SwitchSetting(
+                    title = "Download on Wi-Fi only",
+                    body = "Downloads wait until the phone is on Wi-Fi",
+                    checked = wifiOnly,
+                    onChange = { settings.downloadWifiOnly.value = it },
                 )
-                Row(
-                    Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                ) {
-                    listOf(0 to "No limit", 1024 to "1 GB", 2048 to "2 GB", 5120 to "5 GB", 10240 to "10 GB").forEach { (mb, label) ->
-                        FilterChip(
-                            selected = limitMb == mb,
-                            onClick = { settings.downloadLimitMb.value = mb },
-                            label = { Text(label) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = Palette.OnAura),
-                        )
+                SwitchSetting(
+                    title = "Download liked songs",
+                    body = "Every song you like is saved on the phone for offline play",
+                    checked = autoLiked,
+                    onChange = { settings.autoDownloadLiked.value = it },
+                )
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text("Storage limit", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Using ${com.aurawave.player.playback.Downloads.formatSize(used)}" +
+                            if (limitMb > 0) " of ${com.aurawave.player.playback.Downloads.formatSize(limitMb * 1024L * 1024)}" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(0 to "No limit", 1024 to "1 GB", 2048 to "2 GB", 5120 to "5 GB", 10240 to "10 GB").forEach { (mb, label) ->
+                            FilterChip(
+                                selected = limitMb == mb,
+                                onClick = { settings.downloadLimitMb.value = mb },
+                                label = { Text(label) },
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = Palette.OnAura),
+                            )
+                        }
                     }
                 }
+                ActionSetting(
+                    title = "Remove all downloads",
+                    body = if (used > 0) "Frees ${com.aurawave.player.playback.Downloads.formatSize(used)}" else "Nothing downloaded",
+                    enabled = used > 0,
+                    onClick = { confirmRemoveAll = true },
+                )
+                if (confirmRemoveAll) {
+                    ConfirmDialog(
+                        title = "Remove all downloads?",
+                        body = "Every downloaded song is removed from this phone. Your library and playlists stay as they are.",
+                        confirmLabel = "Remove all downloads",
+                        onDismiss = { confirmRemoveAll = false },
+                        onConfirm = {
+                            confirmRemoveAll = false
+                            graph.downloads.removeAll()
+                            actions.say("Downloads removed")
+                        },
+                    )
+                }
             }
-            ActionSetting(
-                title = "Remove all downloads",
-                body = if (used > 0) "Frees ${com.aurawave.player.playback.Downloads.formatSize(used)}" else "Nothing downloaded",
-                enabled = used > 0,
-                onClick = { confirmRemoveAll = true },
-            )
-            if (confirmRemoveAll) {
-                ConfirmDialog(
-                    title = "Remove all downloads?",
-                    body = "Every downloaded song is removed from this phone. Your library and playlists stay as they are.",
-                    confirmLabel = "Remove all downloads",
-                    onDismiss = { confirmRemoveAll = false },
-                    onConfirm = {
-                        confirmRemoveAll = false
-                        graph.downloads.removeAll()
-                        actions.say("Downloads removed")
-                    },
+
+            FoldedGroup("Your data") {
+                Text(
+                    "Everything is stored on this phone. Back it up before reinstalling the app or switching phones.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                ActionSetting(
+                    title = "Back up library",
+                    body = "${liked.size} liked, ${playlists.size} playlists, $plays plays",
+                    onClick = { saveBackup.launch("aurawave-backup-${LocalDate.now()}.json") },
+                )
+                ActionSetting(
+                    title = "Restore from a backup",
+                    body = "Merges a backup into this library. Backups from the old AuraWave app work too.",
+                    enabled = progress !is Backup.Progress.Working,
+                    onClick = { openBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
+                )
+                (progress as? Backup.Progress.Working)?.let { RestoreProgress(it) }
+                ActionSetting(
+                    title = "Clear listening history",
+                    body = if (plays == 0) "No plays recorded" else "$plays plays recorded",
+                    enabled = plays > 0,
+                    onClick = { confirmClearHistory = true },
                 )
             }
 
-            SettingsGroup("Your data")
-            Text(
-                "Everything is stored on this phone. Back it up before reinstalling the app or switching phones.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            ActionSetting(
-                title = "Back up library",
-                body = "${liked.size} liked, ${playlists.size} playlists, $plays plays",
-                onClick = { saveBackup.launch("aurawave-backup-${LocalDate.now()}.json") },
-            )
-            ActionSetting(
-                title = "Restore from a backup",
-                body = "Merges a backup into this library. Backups from the old AuraWave app work too.",
-                enabled = progress !is Backup.Progress.Working,
-                onClick = { openBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
-            )
-            (progress as? Backup.Progress.Working)?.let { RestoreProgress(it) }
-            ActionSetting(
-                title = "Clear listening history",
-                body = if (plays == 0) "No plays recorded" else "$plays plays recorded",
-                enabled = plays > 0,
-                onClick = { confirmClearHistory = true },
-            )
+            FoldedGroup("Recommendations and search") {
+                ActionSetting(
+                    title = "Show hidden songs and artists again",
+                    body = if (hidden.isEmpty()) "Nothing hidden" else "${hidden.size} kept out of recommendations",
+                    enabled = hidden.isNotEmpty(),
+                    onClick = { library.resetHidden(); actions.say("Hidden songs and artists can be recommended again") },
+                )
+                ActionSetting(
+                    title = "Clear recent searches",
+                    body = if (searches.isEmpty()) "No recent searches" else "${searches.size} saved",
+                    enabled = searches.isNotEmpty(),
+                    onClick = { library.clearSearches(); actions.say("Recent searches cleared") },
+                )
+            }
 
-            SettingsGroup("Recommendations and search")
-            ActionSetting(
-                title = "Show hidden songs and artists again",
-                body = if (hidden.isEmpty()) "Nothing hidden" else "${hidden.size} kept out of recommendations",
-                enabled = hidden.isNotEmpty(),
-                onClick = { library.resetHidden(); actions.say("Hidden songs and artists can be recommended again") },
-            )
-            ActionSetting(
-                title = "Clear recent searches",
-                body = if (searches.isEmpty()) "No recent searches" else "${searches.size} saved",
-                enabled = searches.isNotEmpty(),
-                onClick = { library.clearSearches(); actions.say("Recent searches cleared") },
-            )
+            FoldedGroup("App") {
+                UpdateSettings(graph)
+                CrashSetting(graph)
+            }
 
-            SettingsGroup("App")
-            UpdateSettings(graph)
-            CrashSetting(graph)
-
-            SettingsGroup("About")
-            Text(
-                "AuraWave ${graph.updates.installed}\nPlays audio from YouTube Music. Synced lyrics come from LRCLIB. " +
-                    "Streams are found with NewPipeExtractor. AuraWave is free software under the GNU General Public " +
-                    "License, version 3: you may share and change it under the same licence.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+            FoldedGroup("About") {
+                Text(
+                    "AuraWave ${graph.updates.installed}\nPlays audio from YouTube Music. Synced lyrics come from LRCLIB. " +
+                        "Streams are found with NewPipeExtractor. AuraWave is free software under the GNU General Public " +
+                        "License, version 3: you may share and change it under the same licence.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 
@@ -498,8 +522,90 @@ private fun QualitySetting(title: String, pref: com.aurawave.player.data.Setting
     }
 }
 
+/** The background, the accent colour and the swipe on songs. Each change shows at once, behind the page. */
+@Composable
+private fun LookSettings(graph: AppGraph) {
+    val settings = graph.settings
+    val backdrop by settings.themeBackdrop.flow.collectAsStateWithLifecycle()
+    val accent by settings.themeAccent.flow.collectAsStateWithLifecycle()
+    val swipe by settings.swipeSongs.flow.collectAsStateWithLifecycle()
+    val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = Palette.OnAura)
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Background", style = MaterialTheme.typography.bodyLarge)
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+            Backdrop.entries.forEach { choice ->
+                FilterChip(
+                    selected = backdrop == choice.name,
+                    onClick = {
+                        settings.themeBackdrop.value = choice.name
+                        Palette.backdrop = choice
+                    },
+                    label = { Text(choice.label) },
+                    colors = chipColors,
+                )
+            }
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text("Accent colour", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp))
+        Text(
+            "From the cover changes with each song; a fixed colour stays the same",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+        ) {
+            Accent.entries.forEach { choice ->
+                FilterChip(
+                    selected = accent == choice.name,
+                    onClick = { settings.themeAccent.value = choice.name },
+                    label = { Text(choice.label) },
+                    leadingIcon = choice.aura?.let { aura ->
+                        { Box(Modifier.size(14.dp).clip(CircleShape).background(aura.accent)) }
+                    },
+                    colors = chipColors,
+                )
+            }
+        }
+    }
+    SwitchSetting(
+        title = "Swipe on songs",
+        body = "Swipe a song right to play it next, left to like it",
+        checked = swipe,
+        onChange = { settings.swipeSongs.value = it },
+    )
+}
+
 /** Matches AudioQuality: about 70, 128 and 160 kbit/s. */
 private val QUALITIES = listOf("HIGH" to "High", "NORMAL" to "Normal", "LOW" to "Data saver")
+
+/** A group that is set up once and then left alone: closed until its title is tapped, so the page stays short. */
+@Composable
+private fun FoldedGroup(title: String, content: @Composable () -> Unit) {
+    var open by rememberSaveable(title) { mutableStateOf(false) }
+    val turn by animateFloatAsState(if (open) 180f else 0f, tween(200), label = "fold")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = if (open) "Close $title" else "Open $title") { open = !open }
+            .padding(start = 16.dp, end = 12.dp, top = 18.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = Palette.Haze, modifier = Modifier.rotate(turn))
+    }
+    AnimatedVisibility(
+        visible = open,
+        enter = expandVertically(tween(220)) + fadeIn(tween(180)),
+        exit = shrinkVertically(tween(200)) + fadeOut(tween(120)),
+    ) {
+        Column { content() }
+    }
+}
 
 @Composable
 fun SettingsGroup(title: String) {

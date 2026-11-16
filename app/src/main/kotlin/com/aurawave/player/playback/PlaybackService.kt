@@ -2,6 +2,7 @@ package com.aurawave.player.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.media.audiofx.AudioEffect
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -12,6 +13,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.LibraryParams
@@ -74,6 +76,9 @@ class PlaybackService : MediaLibraryService() {
     private var episodePlaying: com.aurawave.innertube.Track? = null
     private var placeJob: Job? = null
 
+    /** What the player is on, to tell a new song from the same song changing its recording. */
+    private var playing: MediaItem? = null
+
     /** Queue files are written one at a time, off the main thread. */
     private val disk = Dispatchers.IO.limitedParallelism(1)
 
@@ -93,6 +98,7 @@ class PlaybackService : MediaLibraryService() {
             .build()
         sound = SoundEngine(player, graph.settings, graph.loudness, graph.sound, scope)
         sound.start()
+        announceAudioSession(player.audioSessionId)
         crossfader = Crossfader(
             this, player, mediaSources, sound, { graph.settings.crossfadeSec.value }, scope,
             listenerBusy = { fading.busy },
@@ -111,6 +117,7 @@ class PlaybackService : MediaLibraryService() {
         fading = FadingPlayer(player, sound) { graph.settings.fades.value }
         session = MediaLibrarySession.Builder(this, fading, sessionCallback)
             .setSessionActivity(openApp)
+            .setBitmapLoader(CoverLoader(applicationContext, scope))
             .build()
 
         setMediaNotificationProvider(
@@ -122,11 +129,28 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
+    /**
+     * The notification can only be swiped away while nothing is playing, and swiping it away
+     * means the listener is done. The player library only makes a note of it and leaves the
+     * service running for good, so the service is stopped here. With the app off screen that
+     * ends it; with the app open it lives on until the app is left. The queue and the place
+     * in the song are saved either way, so the app reopens where the listener left off.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val result = super.onStartCommand(intent, flags, startId)
+        if (intent?.getBooleanExtra(MediaNotification.NOTIFICATION_DISMISSED_EVENT_KEY, false) == true) {
+            // After the library has finished with this intent.
+            scope.launch(Dispatchers.Main) { pauseAllPlayersAndStopSelf() }
+        }
+        return result
+    }
+
     override fun onDestroy() {
         if (songsJob?.isActive == true) writeSongs() // a queue change still waiting to be written
         savePlace()
         graph.sleepTimer.cancel()
         graph.listenLog.songEnded()
+        announceAudioSession(C.AUDIO_SESSION_ID_UNSET)
         scope.cancel()
         session?.release()
         session = null
@@ -244,7 +268,8 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 asked
             }
-            if (item.toTrack().kind == Kind.VIDEO) return@map item
+            // A video, or a song being watched as its video, is already the recording that was asked for.
+            if (item.toTrack().kind == Kind.VIDEO || item.video != null) return@map item
             val pinned = pins[Match.songKey(item.mediaMetadata.title?.toString(), item.mediaMetadata.artist?.toString())]
                 ?.takeIf { it != item.mediaId }
                 ?.let { graph.library.dao.song(it) }
@@ -283,8 +308,23 @@ class PlaybackService : MediaLibraryService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (mediaItem == null) {
                 graph.listenLog.songEnded() // the queue was cleared
+                playing = null
+                // Nothing left to play: the service need not outlive the app's screen. Playing
+                // again starts it again.
+                stopSelf()
                 return
             }
+            // The Song/Video switch swaps the recording under the playing song. It is still the
+            // same song: the same listen, the same place in the sleep count, nothing to resume.
+            val was = playing
+            playing = mediaItem
+            val sameSong = reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED &&
+                mediaItem.mediaId == was?.mediaId && mediaItem.streamId != was.streamId
+            if (sameSong) {
+                sound.levelFor(mediaItem.streamId)
+                return
+            }
+            backToSongs(except = mediaItem)
             heard += mediaItem.mediaId
             val track = mediaItem.toTrack()
             val finished = episodePlaying
@@ -294,7 +334,7 @@ class PlaybackService : MediaLibraryService() {
             episodePlaying = track.takeIf { it.kind == Kind.EPISODE }
             sound.playingEpisode(track.kind == Kind.EPISODE)
             if (track.kind == Kind.EPISODE) resumeEpisode(track)
-            sound.levelFor(mediaItem.mediaId)
+            sound.levelFor(mediaItem.streamId)
             prefetchNext()
             graph.listenLog.songStarted(mediaItem.toTrack(), player.isPlaying)
             countSongForSleep(reason)
@@ -302,7 +342,10 @@ class PlaybackService : MediaLibraryService() {
             savePlace()
         }
 
-        override fun onAudioSessionIdChanged(audioSessionId: Int) = sound.attach(audioSessionId)
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            sound.attach(audioSessionId)
+            announceAudioSession(audioSessionId)
+        }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             graph.listenLog.playingChanged(isPlaying)
@@ -348,12 +391,45 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
             if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
-                extendQueueIfLow()
+                // A recording being swapped leaves the queue as long as it was, and for a moment
+                // shuffle and repeat read as off: not the time to judge whether it is running out.
+                if (!(::fading.isInitialized && fading.swapping)) extendQueueIfLow()
                 saveSongs()
             }
         }
 
         override fun onPlayerError(error: PlaybackException) = moveOn(error)
+    }
+
+    private var announcedSession = C.AUDIO_SESSION_ID_UNSET
+
+    /**
+     * Tells the phone's own sound effects (Dolby Atmos, the maker's equaliser) which audio
+     * session is this app's music, so what the listener chose in that panel is applied to it,
+     * and tells them when the session is over.
+     */
+    private fun announceAudioSession(session: Int) {
+        if (session == announcedSession) return
+        fun tell(action: String, id: Int) = sendBroadcast(
+            Intent(action)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, id)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+                .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC),
+        )
+        if (announcedSession != C.AUDIO_SESSION_ID_UNSET) tell(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION, announcedSession)
+        if (session != C.AUDIO_SESSION_ID_UNSET) tell(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION, session)
+        announcedSession = session
+    }
+
+    /**
+     * A song that was watched as its music video goes back to being streamed as the song once
+     * the player has left it, so it does not come round again as the video's sound with nobody watching.
+     */
+    private fun backToSongs(except: MediaItem) {
+        for (i in 0 until player.mediaItemCount) {
+            val item = player.getMediaItemAt(i)
+            if (item.video != null && item.mediaId != except.mediaId) fading.replaceMediaItem(i, item.withVideo(null))
+        }
     }
 
     /**
@@ -368,6 +444,22 @@ class PlaybackService : MediaLibraryService() {
                 error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
             )
         if (offline) return
+        // The song was being watched as its music video and the video will not play (blocked in
+        // this country, age-restricted). The song itself may be fine: go back to it where it was,
+        // and remember the video so it is not offered again.
+        val item = player.currentMediaItem
+        val video = item?.video
+        if (item != null && video != null) {
+            graph.streamUrls.videoFailed(video)
+            val index = player.currentMediaItemIndex
+            // The video may run longer than the song; a place past the song's end starts it over.
+            val length = item.toTrack().durationSec * 1000L
+            val position = player.currentPosition.let { if (length > 0 && it > length - 8_000) 0L else it }
+            fading.replaceMediaItem(index, item.withVideo(null))
+            player.seekTo(index, position)
+            player.prepare()
+            return
+        }
         consecutiveFailures++
         if (consecutiveFailures >= MAX_FAILURES_IN_A_ROW || !player.hasNextMediaItem()) return
         player.seekToNextMediaItem()
@@ -444,7 +536,7 @@ class PlaybackService : MediaLibraryService() {
     private fun prefetchNext() {
         val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let { player.getMediaItemAt(it) } ?: return
         val hint = next.localConfiguration?.uri?.let(::songHint)
-        scope.launch(Dispatchers.IO) { runCatching { graph.streamUrls.prefetch(next.mediaId, hint) } }
+        scope.launch(Dispatchers.IO) { runCatching { graph.streamUrls.prefetch(next.streamId, hint) } }
     }
 
     // ---------- remembering the queue ----------
@@ -459,7 +551,8 @@ class PlaybackService : MediaLibraryService() {
         player.currentMediaItem?.let {
             val track = it.toTrack()
             graph.listenLog.songStarted(track, isPlaying = false)
-            sound.levelFor(it.mediaId)
+            playing = it
+            sound.levelFor(it.streamId)
             episodePlaying = track.takeIf { t -> t.kind == Kind.EPISODE }
             sound.playingEpisode(track.kind == Kind.EPISODE)
         }

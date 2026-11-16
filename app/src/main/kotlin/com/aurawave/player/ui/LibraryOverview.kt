@@ -1,5 +1,7 @@
 package com.aurawave.player.ui
 
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +74,9 @@ fun LibraryOverview(
     liked: List<Track>?,
     history: List<Track>?,
     playlists: List<PlaylistSummary>?,
+    /** Collections as a grid of covers, or as a compact list. */
+    grid: Boolean,
+    onOpenPlaylists: () -> Unit,
     onOpenLiked: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
@@ -101,11 +106,21 @@ fun LibraryOverview(
         columns = GridCells.Adaptive(150.dp),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(if (grid) 18.dp else 6.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(collections, key = { it.key }) { CollectionTile(it) }
-        item(key = "new-playlist") { NewPlaylistTile(onClick = { naming = true }) }
+        if (grid) {
+            items(collections, key = { it.key }) { CollectionTile(it) }
+            item(key = "new-playlist") { NewPlaylistTile(onClick = { naming = true }) }
+        } else {
+            items(collections, key = { it.key }, span = { GridItemSpan(maxLineSpan) }) { CollectionRow(it) }
+            item(key = "new-playlist", span = { GridItemSpan(maxLineSpan) }) {
+                ActionRow(Icons.Rounded.Add, "New playlist", "Start an empty one") { naming = true }
+            }
+        }
+        item(key = "import", span = { GridItemSpan(maxLineSpan) }) {
+            ActionRow(Icons.Rounded.Link, "Import from a link", "A song, album or playlist from Spotify or YouTube", onOpenPlaylists)
+        }
 
         if (albums.isNotEmpty()) {
             item(key = "albums", span = { GridItemSpan(maxLineSpan) }) {
@@ -172,6 +187,49 @@ private fun CollectionTile(collection: Collection) {
         Spacer(Modifier.height(8.dp))
         Text(collection.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(collection.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
+/** A collection as one line: a small picture of its covers, its name and how much is in it. */
+@Composable
+private fun CollectionRow(collection: Collection) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "Open ${collection.title}", onClick = collection.onOpen).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(Palette.Raised), contentAlignment = Alignment.Center) {
+            val covers = collection.covers.filter { it.isNotEmpty() }.distinct()
+            if (covers.isEmpty()) {
+                Icon(collection.icon, contentDescription = null, tint = Palette.Faint, modifier = Modifier.size(24.dp))
+            } else {
+                CoverQuilt(covers, Modifier.fillMaxSize())
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(collection.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(collection.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+        Icon(collection.icon, contentDescription = null, tint = Palette.Faint, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(4.dp))
+    }
+}
+
+/** Something to do rather than something to open: a quiet row with a symbol. */
+@Composable
+private fun ActionRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(Palette.Dusk), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = Palette.Haze, modifier = Modifier.size(24.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 

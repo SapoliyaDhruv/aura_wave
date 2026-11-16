@@ -53,6 +53,9 @@ class Catalog(private val tube: InnerTube) {
     suspend fun radio(videoId: String): List<Track> =
         remembered("radio:$videoId", 60 * MINUTE) { tube.radio(videoId) }
 
+    /** One recording by its id (a pasted YouTube link). */
+    suspend fun song(videoId: String): Track? = remembered("song:$videoId", 60 * MINUTE) { tube.song(videoId) }
+
     suspend fun artist(id: String, name: String): ArtistPage? =
         remembered("artist:${id.ifEmpty { name.lowercase() }}", 60 * MINUTE) { tube.artist(id, name) }
 
@@ -97,18 +100,12 @@ class Catalog(private val tube: InnerTube) {
     suspend fun shelves(browseId: String, params: String = ""): List<Shelf> =
         remembered("shelves:$browseId:$params", 60 * MINUTE) { tube.shelves(browseId, params) }
 
-    /** The official music video of a song, when YouTube Music has one that matches it. */
-    suspend fun musicVideoFor(track: Track): Track? {
-        if (track.kind != com.aurawave.innertube.Kind.SONG) return null
-        val lead = track.artists.firstOrNull()?.name ?: track.artist.split(',', '&').first().trim()
-        val want = Match.Want(track.title, track.artist, 0)
-        return runCatching { searchVideos("${track.title} $lead") }.getOrDefault(emptyList())
-            .filter { it.kind == com.aurawave.innertube.Kind.VIDEO && Match.titleSimilarity(track.title, it.title) >= 0.6 }
-            .map { it to Match.scoreCandidate(want, Match.Candidate(it.title, it.artist, it.album, it.durationSec, it.kind, channel = it.artist)) }
-            .filter { it.second.accept }
-            .maxByOrNull { it.second.score }
-            ?.first
-    }
+    /**
+     * The official music video of a song, when YouTube Music has one that matches it. The answer
+     * is kept, so a song is paired with the same video each time the listener switches to Video.
+     */
+    suspend fun musicVideoFor(track: Track): Track? =
+        runCatching { remembered("video-of:${track.videoId}", 6 * 60 * MINUTE) { tube.musicVideoFor(track) } }.getOrNull()
 
     /** Other recordings of the same song, best match first, for "Not the right song?". */
     suspend fun alternatives(track: Track): List<Track> = coroutineScope {

@@ -1,5 +1,20 @@
 package com.aurawave.player.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -96,6 +111,18 @@ class SearchState(private val catalog: Catalog, val library: Library, private va
     private var suggestJob: Job? = null
     private var searchJob: Job? = null
 
+    /** Set when something outside the screen (Home's "Search music", the Search tab pressed twice) wants the keyboard up. */
+    var focusWanted by mutableStateOf(false)
+        private set
+
+    fun askForFocus() {
+        focusWanted = true
+    }
+
+    fun focusGiven() {
+        focusWanted = false
+    }
+
     fun onQueryChange(text: String) {
         query = text
         suggestJob?.cancel()
@@ -104,24 +131,56 @@ class SearchState(private val catalog: Catalog, val library: Library, private va
             return
         }
         suggestJob = scope.launch {
-            delay(250) // wait for a pause in typing
-            suggestions = runCatching { catalog.suggestions(text) }.getOrDefault(emptyList())
+            delay(SUGGEST_AFTER_MS) // wait for a pause in typing
+            val suggested = try {
+                catalog.suggestions(text)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            suggestions = suggested
+
+            // Still nothing more typed: show results for the words so far, without waiting for
+            // Search to be pressed. A half-typed word that finds nothing changes nothing.
+            delay(RESULTS_AFTER_MS)
+            val q = text.trim()
+            if (q.length < 2 || q == submitted) return@launch
+            val found = try {
+                run(q, filter)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return@launch
+            }
+            if (found.isEmpty()) return@launch
+            // The suggestions stay, above the results, so no row changes under a finger reaching for one.
+            searchJob?.cancel()
+            submitted = q
+            result = found
+            error = null
+            loading = false
         }
     }
 
     fun changeFilter(f: SearchFilter) {
         if (f == filter) return
         filter = f
-        if (submitted.isNotEmpty()) submit(submitted)
+        if (submitted.isNotEmpty()) submit(submitted, again = true)
     }
 
-    fun submit(text: String = query) {
+    /** [again] runs the search even when its results are on screen (the filter changed). */
+    fun submit(text: String = query, again: Boolean = false) {
         val q = text.trim()
         if (q.isEmpty()) return
         query = q
-        submitted = q
         suggestJob?.cancel()
         suggestions = emptyList()
+        if (!again && q == submitted && result != null && !loading) {
+            library.addSearch(q) // already on screen from typing: pressing Search just files it under recent searches
+            return
+        }
+        submitted = q
         searchJob?.cancel()
         loading = true
         error = null
@@ -167,6 +226,12 @@ class SearchState(private val catalog: Catalog, val library: Library, private va
     }
 }
 
+private const val SUGGEST_AFTER_MS = 200L
+private const val RESULTS_AFTER_MS = 450L
+
+/** Few enough that results arriving underneath them can be seen above the keyboard. */
+private const val SUGGESTIONS_SHOWN = 5
+
 private fun SearchResult.isEmpty() =
     songs.isEmpty() && videos.isEmpty() && artists.isEmpty() && albums.isEmpty() && playlists.isEmpty() && podcasts.isEmpty()
 
@@ -181,38 +246,34 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
     }
     val currentId = player.current?.mediaId
 
-    Column(Modifier.fillMaxSize()) {
-        TextField(
-            value = state.query,
-            onValueChange = state::onQueryChange,
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-            placeholder = { Text("Songs, artists, albums or a line of lyrics") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            trailingIcon = {
-                if (state.query.isNotEmpty()) {
-                    IconButton(onClick = state::clear) { Icon(Icons.Rounded.Close, contentDescription = "Clear search") }
-                }
+    // Asked for from outside: put the cursor in the field and bring the keyboard up.
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(state.focusWanted) {
+        if (!state.focusWanted) return@LaunchedEffect
+        runCatching { focusRequester.requestFocus() }
+        keyboard?.show()
+        state.focusGiven()
+    }
+
+    // The keyboard covers the bottom bar; the lists end above it, so the last rows can be reached.
+    Column(Modifier.fillMaxSize().imePadding()) {
+        SearchField(
+            query = state.query,
+            onQueryChange = state::onQueryChange,
+            onClear = {
+                state.clear()
+                runCatching { focusRequester.requestFocus() }
+                keyboard?.show()
             },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { submit(state.query) }),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Palette.Raised,
-                unfocusedContainerColor = Palette.Raised,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                focusedLeadingIconColor = Palette.Haze,
-                unfocusedLeadingIconColor = Palette.Haze,
-                focusedPlaceholderColor = Palette.Faint,
-                unfocusedPlaceholderColor = Palette.Faint,
-            ),
+            onSearch = { submit(state.query) },
+            focusRequester = focusRequester,
         )
 
         val result = state.result
         // Typing something new replaces the old results with suggestions for the new text.
         val typingNewQuery = state.query.trim() != state.submitted
-        if (state.submitted.isNotEmpty() && !(typingNewQuery && state.suggestions.isNotEmpty())) {
+        // Not while suggestions are up: the chips arriving above them would push every row down.
+        if (state.submitted.isNotEmpty() && state.suggestions.isEmpty()) {
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -233,16 +294,7 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
         when {
             typingNewQuery && state.suggestions.isNotEmpty() ->
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(state.suggestions) { s ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { submit(s) }.padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Rounded.Search, contentDescription = null, tint = Palette.Faint)
-                            Spacer(Modifier.width(16.dp))
-                            Text(s, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
+                    items(state.suggestions.take(SUGGESTIONS_SHOWN)) { s -> SuggestionRow(s) { submit(s) } }
                 }
 
             state.loading -> LoadingBox()
@@ -261,9 +313,72 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
                 body = "Check the spelling, or try the artist's name with the song title.",
             )
 
-            else -> SearchResults(result, state.filter, currentId, player, onOpenArtist)
+            else -> SearchResults(result, state.filter, currentId, player, onOpenArtist, state.suggestions.take(SUGGESTIONS_SHOWN), onSuggestion = { submit(it) })
         }
     }
+}
+
+@Composable
+private fun SuggestionRow(text: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, contentDescription = null, tint = Palette.Faint)
+        Spacer(Modifier.width(16.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * The search field. It answers a touch: the outline and the magnifier take the song's
+ * colour while it has the cursor, and the clear button fades in with the first letter.
+ */
+@Composable
+private fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    onSearch: () -> Unit,
+    focusRequester: FocusRequester,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val accent = LocalAura.current.accent
+    val outline by animateColorAsState(if (focused) accent.copy(alpha = 0.9f) else Palette.Line, tween(180), label = "searchOutline")
+    val fill by animateColorAsState(if (focused) Palette.Dusk else Palette.Raised, tween(180), label = "searchFill")
+    val shape = RoundedCornerShape(28.dp)
+    TextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+            .border(1.5.dp, outline, shape)
+            .focusRequester(focusRequester),
+        placeholder = { Text("Songs, artists, albums or lyrics", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = if (focused) accent else Palette.Haze) },
+        trailingIcon = {
+            AnimatedVisibility(query.isNotEmpty(), enter = fadeIn(tween(120)) + scaleIn(tween(160)), exit = fadeOut(tween(100)) + scaleOut(tween(120))) {
+                IconButton(onClick = onClear) { Icon(Icons.Rounded.Close, contentDescription = "Clear search") }
+            }
+        },
+        singleLine = true,
+        shape = shape,
+        interactionSource = interaction,
+        textStyle = MaterialTheme.typography.bodyLarge,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = fill,
+            unfocusedContainerColor = fill,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            cursorColor = accent,
+            focusedPlaceholderColor = Palette.Faint,
+            unfocusedPlaceholderColor = Palette.Faint,
+        ),
+    )
 }
 
 /** Before searching: recent searches and ways into YouTube Music's catalogue. */
@@ -310,9 +425,19 @@ private val BROWSE = listOf(
 )
 
 @Composable
-private fun SearchResults(result: SearchResult, filter: SearchFilter, currentId: String?, player: PlayerConnection, onOpenArtist: (ArtistRef) -> Unit) {
+private fun SearchResults(
+    result: SearchResult,
+    filter: SearchFilter,
+    currentId: String?,
+    player: PlayerConnection,
+    onOpenArtist: (ArtistRef) -> Unit,
+    /** Shown first while the results came from typing, in the places they already had on screen. */
+    suggestions: List<String> = emptyList(),
+    onSuggestion: (String) -> Unit = {},
+) {
     val actions = LocalSongActions.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        items(suggestions, key = { "suggest:$it" }) { s -> SuggestionRow(s) { onSuggestion(s) } }
         if (result.artists.isNotEmpty()) {
             if (filter == SearchFilter.Artists) {
                 items(result.artists, key = { "a-${it.id}" }) { a ->

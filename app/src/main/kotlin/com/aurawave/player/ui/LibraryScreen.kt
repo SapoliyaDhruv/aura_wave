@@ -1,5 +1,9 @@
 package com.aurawave.player.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -35,7 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalClipboard
 import com.aurawave.innertube.ArtistRef
-import com.aurawave.innertube.Spotify
+import com.aurawave.innertube.MusicLink
 import com.aurawave.player.data.PlaylistImporter
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -92,31 +96,34 @@ fun LibraryScreen(
     val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
     val playlists by graph.library.playlists.collectAsStateWithLifecycle(initialValue = null)
 
+    val grid by graph.settings.libraryGrid.flow.collectAsStateWithLifecycle()
+    // "Import from a link" on the overview: the playlists open with the link box already up.
+    var importOnOpen by remember { mutableStateOf(false) }
+    // The library opens on everything at a glance; a collection opens over it, and Back returns.
+    BackHandler(enabled = shelf != Shelf.Overview) { shelf = Shelf.Overview }
+
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Your library",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onOpenStats) { Icon(Icons.Rounded.Insights, contentDescription = "Listening stats") }
-            IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
-        }
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Shelf.entries.forEach { s ->
-                FilterChip(
-                    selected = shelf == s,
-                    onClick = { shelf = s },
-                    label = { Text(s.label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = Palette.OnAura,
-                    ),
+        if (shelf == Shelf.Overview) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Your library",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = { graph.settings.libraryGrid.value = !grid }) {
+                    Icon(
+                        if (grid) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
+                        contentDescription = if (grid) "Show as a list" else "Show as a grid",
+                    )
+                }
+                IconButton(onClick = onOpenStats) { Icon(Icons.Rounded.Insights, contentDescription = "Listening stats") }
+                IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { shelf = Shelf.Overview }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to your library") }
+                Text(shelf.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             }
         }
 
@@ -126,6 +133,11 @@ fun LibraryScreen(
                 liked = liked,
                 history = history,
                 playlists = playlists,
+                grid = grid,
+                onOpenPlaylists = {
+                    importOnOpen = true
+                    shelf = Shelf.Playlists
+                },
                 onOpenLiked = { shelf = Shelf.Liked },
                 onOpenHistory = { shelf = Shelf.History },
                 onOpenDownloads = { shelf = Shelf.Downloads },
@@ -145,7 +157,7 @@ fun LibraryScreen(
                 emptyTitle = "Nothing played yet",
                 emptyBody = "Songs you listen to appear here, most recent first.",
             )
-            Shelf.Playlists -> PlaylistShelf(graph, playlists, onOpenPlaylist)
+            Shelf.Playlists -> PlaylistShelf(graph, player, playlists, onOpenPlaylist, askForLink = importOnOpen, onAsked = { importOnOpen = false })
             Shelf.Albums -> AlbumShelf(graph)
             Shelf.Downloads -> DownloadShelf(graph, player)
             Shelf.Artists -> ArtistShelf(graph)
@@ -284,9 +296,19 @@ private fun ArtistShelf(graph: AppGraph) {
 }
 
 @Composable
-private fun PlaylistShelf(graph: AppGraph, playlists: List<PlaylistSummary>?, onOpenPlaylist: (Long) -> Unit) {
+private fun PlaylistShelf(
+    graph: AppGraph,
+    player: PlayerConnection,
+    playlists: List<PlaylistSummary>?,
+    onOpenPlaylist: (Long) -> Unit,
+    /** Open with the link box already showing. */
+    askForLink: Boolean = false,
+    onAsked: () -> Unit = {},
+) {
+    val actions = LocalSongActions.current
     var naming by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(askForLink) }
+    LaunchedEffect(Unit) { onAsked() }
     val scope = rememberCoroutineScope()
     val progress by graph.importer.progress.collectAsStateWithLifecycle()
     if (playlists == null) return
@@ -316,7 +338,7 @@ private fun PlaylistShelf(graph: AppGraph, playlists: List<PlaylistSummary>?, on
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("Import from a link", style = MaterialTheme.typography.bodyLarge)
-                    Text("A public Spotify or YouTube playlist", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("A song, album or playlist from Spotify or YouTube", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -383,10 +405,31 @@ private fun PlaylistShelf(graph: AppGraph, playlists: List<PlaylistSummary>?, on
             },
             dismissButton = { TextButton(onClick = graph.importer::dismiss) { Text("Close") } },
         )
+        is PlaylistImporter.Progress.Found -> AlertDialog(
+            onDismissRequest = graph.importer::dismiss,
+            containerColor = Palette.Dusk,
+            title = { Text("Found the song") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Artwork(p.track.coverUrl, 56.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(p.track.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(p.track.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { graph.importer.dismiss(); player.play(listOf(p.track)) }) { Text("Play") }
+            },
+            dismissButton = {
+                TextButton(onClick = { graph.importer.dismiss(); actions.addToPlaylist(listOf(p.track)) }) { Text("Add to playlist") }
+            },
+        )
         is PlaylistImporter.Progress.Failed -> AlertDialog(
             onDismissRequest = graph.importer::dismiss,
             containerColor = Palette.Dusk,
-            title = { Text("Couldn't import the playlist") },
+            title = { Text("Couldn't import from that link") },
             text = { Text(p.message) },
             confirmButton = { TextButton(onClick = graph.importer::dismiss) { Text("Close") } },
         )
@@ -413,17 +456,17 @@ private fun LinkDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
     LaunchedEffect(Unit) {
         // Offer what was just copied from Spotify or YouTube.
         val copied = runCatching { clipboard.getClipEntry()?.clipData?.getItemAt(0)?.text?.toString() }.getOrNull().orEmpty()
-        if (Spotify.playlistId(copied) != null || Spotify.youtubePlaylistId(copied) != null) link = copied
+        if (copied.startsWith("http") && MusicLink.parse(copied) != null) link = copied
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Palette.Dusk,
-        title = { Text("Import a playlist") },
+        title = { Text("Import from a link") },
         text = {
             Column {
                 Text(
-                    "Paste the link from Share in Spotify, YouTube or YouTube Music. The playlist must be public. " +
-                        "Spotify songs are matched to YouTube Music; Spotify shows at most its first 100 songs.",
+                    "Paste the link from Share in Spotify, YouTube or YouTube Music: a song, an album or a playlist. " +
+                        "It must be public. Spotify songs are matched to YouTube Music; Spotify shows at most the first 100 songs of a playlist.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -431,13 +474,13 @@ private fun LinkDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
                 OutlinedTextField(
                     value = link,
                     onValueChange = { link = it },
-                    label = { Text("Playlist link") },
+                    label = { Text("Link") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onImport(link.trim()) }, enabled = link.isNotBlank()) { Text("Import playlist") } },
+        confirmButton = { TextButton(onClick = { onImport(link.trim()) }, enabled = link.isNotBlank()) { Text("Import") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

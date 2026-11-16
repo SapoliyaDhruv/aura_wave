@@ -1,10 +1,14 @@
 package com.aurawave.player.ui
 
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.graphics.graphicsLayer
@@ -14,7 +18,10 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -44,6 +51,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.MusicVideo
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Forward30
 import androidx.compose.material.icons.rounded.Replay10
@@ -93,55 +101,58 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.media3.common.MediaItem
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.runtime.mutableStateMapOf
 import com.aurawave.innertube.Kind
-import com.aurawave.innertube.Track
+import com.aurawave.player.playback.streamId
 import com.aurawave.player.playback.toTrack
+import com.aurawave.player.playback.video
 
 @Composable
 fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> Unit) {
     val sleepTimer = graph.sleepTimer
     val item = player.current ?: return
+    // Back closes the player before anything on the page underneath gets to act on it.
+    BackHandler(onBack = onClose)
     val meta = item.mediaMetadata
     var queueOpen by remember { mutableStateOf(false) }
     var optionsOpen by remember { mutableStateOf(false) }
     val sleepLabel = rememberSleepLabel(sleepTimer)
     val playingFrom by graph.streamUrls.playingFrom.collectAsStateWithLifecycle()
-    val origin = playingFrom[item.mediaId]
+    val origin = playingFrom[item.streamId]
     var lyricsOpen by rememberSaveable { mutableStateOf(false) }
     val library = LocalLibrary.current
     val liked = item.mediaId in LocalLikedIds.current
     val actions = LocalSongActions.current
     val track = remember(item) { item.toTrack() }
 
-    // Song/Video switch. A song from the audio catalogue is swapped for its official music
-    // video (and back), remembering which song each video stands in for.
-    var videoMode by rememberSaveable { mutableStateOf(false) }
-    val swapped = remember { mutableStateMapOf<String, Track>() }
-    var findingVideo by remember { mutableStateOf(false) }
-    LaunchedEffect(item.mediaId, videoMode) {
-        if (!videoMode || track.kind != Kind.SONG) return@LaunchedEffect
-        findingVideo = true
-        val video = graph.catalog.musicVideoFor(track)
-        findingVideo = false
-        if (player.current?.mediaId != track.videoId) return@LaunchedEffect
-        if (video == null) {
-            actions.say("No music video was found for this song.")
-            videoMode = false
-        } else {
-            swapped[video.videoId] = track
-            player.replaceCurrent(video, player.positionMs)
-        }
+    // Song/Video switch. It is offered only when there is a picture to show: a song needs an
+    // official music video, and a song playing from JioSaavn has none (YouTube would not play
+    // it). The song stays the same song in the queue, with its likes, history and lyrics; while
+    // Video is on it is streamed from its music video instead.
+    val elsewhere = playingFrom[item.mediaId] != null
+    val failedVideos by graph.streamUrls.unplayableVideos.collectAsStateWithLifecycle()
+    var videoId by remember(item.mediaId) { mutableStateOf(item.video) }
+    // The video's own length, when it was looked up here: it is often cut longer or shorter than the song.
+    var videoLengthMs by remember(item.mediaId) { mutableLongStateOf(0L) }
+    var videoMode by rememberSaveable { mutableStateOf(item.video != null) }
+    LaunchedEffect(item.mediaId, elsewhere) {
+        if (track.kind != Kind.SONG || videoId != null || elsewhere) return@LaunchedEffect
+        // Not for a song that is only passing by: skipping through a queue asks YouTube nothing.
+        delay(VIDEO_LOOKUP_AFTER_MS)
+        val found = graph.catalog.musicVideoFor(track) ?: return@LaunchedEffect
+        videoLengthMs = found.durationSec * 1000L
+        videoId = found.videoId
     }
-    val switchMode = { video: Boolean ->
-        if (video != videoMode) {
-            videoMode = video
-            if (!video) swapped.remove(item.mediaId)?.let { song -> player.replaceCurrent(song, player.positionMs) }
-        }
+    val hasVideo = when (track.kind) {
+        Kind.SONG -> videoId != null && !elsewhere && videoId !in failedVideos
+        else -> true // a video, an upload or an episode is its own picture
     }
+    val showVideo = videoMode && hasVideo
+    LaunchedEffect(item.mediaId, showVideo, videoId) {
+        if (track.kind != Kind.SONG) return@LaunchedEffect
+        // The length of the recording being switched to, so a place past its end is not carried over.
+        if (showVideo) player.streamVideo(videoId, videoLengthMs) else player.streamVideo(null, track.durationSec * 1000L)
+    }
+    val switchMode = { on: Boolean -> videoMode = on }
 
     // Drag the top of the player (the bar and the cover) down to close it.
     val drag = remember { Animatable(0f) }
@@ -156,6 +167,29 @@ fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> U
             onVerticalDrag = { change, amount ->
                 change.consume()
                 dragScope.launch { drag.snapTo((drag.value + amount).coerceAtLeast(0f)) }
+            },
+        )
+    }
+
+    // Swipe the cover left for the next song, right for the previous one.
+    val coverSlide = remember { Animatable(0f) }
+    val swipeAt = with(LocalDensity.current) { 72.dp.toPx() }
+    val swipeCover = Modifier.pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onDragEnd = {
+                val dx = coverSlide.value
+                dragScope.launch {
+                    when {
+                        dx < -swipeAt -> player.next()
+                        dx > swipeAt -> player.previous()
+                    }
+                    coverSlide.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow))
+                }
+            },
+            onDragCancel = { dragScope.launch { coverSlide.animateTo(0f) } },
+            onHorizontalDrag = { change, amount ->
+                change.consume()
+                dragScope.launch { coverSlide.snapTo(coverSlide.value + amount * 0.7f) }
             },
         )
     }
@@ -181,41 +215,30 @@ fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> U
                         color = if (sleepLabel != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     )
-                    IconButton(onClick = { lyricsOpen = !lyricsOpen }) {
-                        Icon(
-                            Icons.Rounded.Lyrics,
-                            contentDescription = if (lyricsOpen) "Show cover" else "Show lyrics",
-                            tint = if (lyricsOpen) MaterialTheme.colorScheme.primary else LocalContentColor.current,
-                        )
-                    }
-                    IconButton(onClick = { queueOpen = true }) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Up next") }
                     IconButton(onClick = { optionsOpen = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "Player options") }
-                }
-
-                SingleChoiceSegmentedButtonRow(Modifier.padding(bottom = 12.dp)) {
-                    SegmentedButton(
-                        selected = !videoMode,
-                        onClick = { switchMode(false) },
-                        shape = SegmentedButtonDefaults.itemShape(0, 2),
-                        colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary, activeContentColor = Palette.OnAura),
-                    ) { Text("Song") }
-                    SegmentedButton(
-                        selected = videoMode,
-                        onClick = { switchMode(true) },
-                        shape = SegmentedButtonDefaults.itemShape(1, 2),
-                        colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary, activeContentColor = Palette.OnAura),
-                    ) { Text("Video") }
                 }
 
                 // The cover (or the lyrics) takes whatever height is left, so the controls never fall off small screens.
                 if (lyricsOpen) {
                     LyricsPanel(player, Modifier.weight(1f).fillMaxWidth())
-                } else if (videoMode) {
+                } else if (showVideo) {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        if (findingVideo || track.kind == Kind.SONG) LoadingBox() else VideoPane(graph, player, item.mediaId)
+                        // A song's stream is swapped for its video a moment after Video is chosen.
+                        if (track.kind == Kind.SONG && item.video == null) LoadingBox() else VideoPane(graph, player, item.streamId)
                     }
                 } else {
-                    Box(Modifier.weight(1f).fillMaxWidth().then(dragToClose), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .then(dragToClose)
+                            .then(swipeCover)
+                            .graphicsLayer {
+                                translationX = coverSlide.value
+                                alpha = 1f - (kotlin.math.abs(coverSlide.value) / (swipeAt * 4)).coerceIn(0f, 0.5f)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
                         PlayerCover(meta.artworkUri?.toString(), playing = player.playing)
                     }
                 }
@@ -246,7 +269,41 @@ fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> U
                 SeekBar(player)
                 Spacer(Modifier.height(4.dp))
                 Transport(player)
-                Spacer(Modifier.height(28.dp))
+                // What changes the view sits under the thumb: lyrics, the video when there is one, and the queue.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val quiet = MaterialTheme.colorScheme.onSurfaceVariant
+                    val on = MaterialTheme.colorScheme.primary
+                    IconButton(onClick = { lyricsOpen = !lyricsOpen }) {
+                        Icon(Icons.Rounded.Lyrics, contentDescription = if (lyricsOpen) "Show cover" else "Show lyrics", tint = if (lyricsOpen) on else quiet)
+                    }
+                    AnimatedVisibility(visible = hasVideo, enter = fadeIn(tween(220)), exit = fadeOut(tween(160))) {
+                        IconButton(
+                            onClick = {
+                                // The video takes the cover's place, which the lyrics hide: with the
+                                // lyrics up, the button brings the video back rather than turning it off.
+                                if (videoMode && lyricsOpen) {
+                                    lyricsOpen = false
+                                } else {
+                                    lyricsOpen = false
+                                    switchMode(!videoMode)
+                                }
+                            },
+                        ) {
+                            Icon(
+                                Icons.Rounded.MusicVideo,
+                                contentDescription = if (showVideo && !lyricsOpen) "Show cover" else "Show video",
+                                tint = if (showVideo && !lyricsOpen) on else quiet,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { queueOpen = true }) {
+                        Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Up next", tint = quiet)
+                    }
+                }
             }
         }
     }
@@ -500,3 +557,6 @@ private fun QueueRow(item: MediaItem, isCurrent: Boolean, onClick: () -> Unit, h
         handle()
     }
 }
+
+/** How long a song must stay on the player screen before its music video is looked for. */
+private const val VIDEO_LOOKUP_AFTER_MS = 1500L

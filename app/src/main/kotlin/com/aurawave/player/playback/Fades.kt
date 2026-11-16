@@ -108,6 +108,47 @@ class FadingPlayer(
         return order
     }
 
+    override fun replaceMediaItem(index: Int, mediaItem: MediaItem) = replaceMediaItems(index, index + 1, listOf(mediaItem))
+
+    /**
+     * Swapping a song for another recording of it (the Song/Video switch, "Not the right
+     * song?"). Left to itself the player gives the new recording a random place in the shuffled
+     * order and, when the old one was playing, moves on to whatever shuffle or repeat says is
+     * next. So shuffle and repeat are set aside for the swap: the new recording then takes the
+     * old one's place, in the queue and in the shuffled order, and keeps playing if it was.
+     */
+    override fun replaceMediaItems(fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>) {
+        val oneForOne = fromIndex >= 0 && toIndex <= exo.mediaItemCount && toIndex - fromIndex == mediaItems.size
+        if (!oneForOne) {
+            exo.replaceMediaItems(fromIndex, toIndex, mediaItems)
+            return
+        }
+        val shuffled = exo.shuffleModeEnabled
+        val repeat = exo.repeatMode
+        val order = if (shuffled) shuffledOrder() else null
+        swapping = true
+        try {
+            exo.shuffleModeEnabled = false
+            if (repeat == Player.REPEAT_MODE_ONE) exo.repeatMode = Player.REPEAT_MODE_OFF
+            exo.replaceMediaItems(fromIndex, toIndex, mediaItems)
+            if (order != null && order.size == exo.mediaItemCount) {
+                exo.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(order.toIntArray(), System.nanoTime()))
+            }
+            exo.shuffleModeEnabled = shuffled
+            exo.repeatMode = repeat
+        } finally {
+            swapping = false
+        }
+    }
+
+    /**
+     * True while a recording is being swapped. The player tells its listeners about each step
+     * as it happens, shuffle and repeat set aside included; a listener that acts on the queue's
+     * shape (autoplay) should wait until this is false again.
+     */
+    var swapping = false
+        private set
+
     override fun seekToNext() = skip { exo.seekToNext() }
 
     override fun seekToNextMediaItem() = skip { exo.seekToNextMediaItem() }

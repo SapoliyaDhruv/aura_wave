@@ -1,5 +1,22 @@
 package com.aurawave.player.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.HeartBroken
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +45,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -39,7 +55,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,8 +123,19 @@ fun TrackRow(
     val actions = LocalSongActions.current
     val liked = track.videoId in LocalLikedIds.current
     val download = LocalDownloads.current[track.videoId]
+    SwipeToAct(
+        // Not while rows are being dragged to a new order: that drag and this swipe would fight.
+        enabled = LocalSwipeSongs.current && trailing == null,
+        liked = liked,
+        onPlayNext = {
+            onPlayNext()
+            actions.say("${track.title} plays next")
+        },
+        onLike = { library.setLiked(track, !liked) },
+        modifier = modifier,
+    ) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
@@ -186,7 +212,95 @@ fun TrackRow(
             }
         }
     }
+    }
 }
+
+/** Whether swiping a song in a list does anything (a setting). Provided by AppRoot. */
+val LocalSwipeSongs = compositionLocalOf { true }
+
+/**
+ * Swipe a song right to play it next, left to like it. The row follows the finger and
+ * uncovers what will happen; the icon lights up, with a tick of the phone, once letting go
+ * will do it. The row always springs back: nothing is removed by a swipe.
+ */
+@Composable
+private fun SwipeToAct(
+    enabled: Boolean,
+    liked: Boolean,
+    onPlayNext: () -> Unit,
+    onLike: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    if (!enabled) {
+        Box(modifier) { content() }
+        return
+    }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val trigger = with(LocalDensity.current) { 64.dp.toPx() }
+    // +1 when letting go will queue the song, -1 when it will like it.
+    var armed by remember { mutableIntStateOf(0) }
+    val playNext by rememberUpdatedState(onPlayNext)
+    val like by rememberUpdatedState(onLike)
+    val accent = MaterialTheme.colorScheme.primary
+    Box(modifier.fillMaxWidth()) {
+        Row(Modifier.matchParentSize().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.AutoMirrored.Rounded.PlaylistPlay,
+                contentDescription = null,
+                tint = if (armed == 1) accent else Palette.Haze,
+                modifier = Modifier.graphicsLayer { alpha = uncovered(offset.value, trigger) },
+            )
+            Spacer(Modifier.weight(1f))
+            Icon(
+                if (liked) Icons.Rounded.HeartBroken else Icons.Rounded.Favorite,
+                contentDescription = null,
+                tint = if (armed == -1) accent else Palette.Haze,
+                modifier = Modifier.graphicsLayer { alpha = uncovered(-offset.value, trigger) },
+            )
+        }
+        Box(
+            Modifier
+                .graphicsLayer { translationX = offset.value }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            when (armed) {
+                                1 -> playNext()
+                                -1 -> like()
+                            }
+                            armed = 0
+                            scope.launch { offset.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)) }
+                        },
+                        onDragCancel = {
+                            armed = 0
+                            scope.launch { offset.animateTo(0f) }
+                        },
+                        onHorizontalDrag = { change, amount ->
+                            change.consume()
+                            // The row lags the finger a little, so it feels held rather than loose.
+                            val next = (offset.value + amount * 0.6f).coerceIn(-trigger * 1.3f, trigger * 1.3f)
+                            scope.launch { offset.snapTo(next) }
+                            val now = when {
+                                next >= trigger -> 1
+                                next <= -trigger -> -1
+                                else -> 0
+                            }
+                            if (now != armed) {
+                                armed = now
+                                if (now != 0) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            }
+                        },
+                    )
+                },
+        ) { content() }
+    }
+}
+
+/** How visible an action's icon is: nothing until the row has moved off it, full when the action is armed. */
+private fun uncovered(moved: Float, trigger: Float): Float = ((moved - trigger * 0.45f) / (trigger * 0.55f)).coerceIn(0f, 1f)
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {

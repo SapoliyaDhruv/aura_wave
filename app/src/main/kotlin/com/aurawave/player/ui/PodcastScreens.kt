@@ -1,5 +1,6 @@
 package com.aurawave.player.ui
 
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,8 @@ fun PodcastsScreen(graph: AppGraph, player: PlayerConnection) {
     val progress by graph.library.episodeProgress.collectAsStateWithLifecycle()
     val actions = LocalSongActions.current
     var fresh by remember { mutableStateOf<List<Episode>?>(null) }
+    var allUnfinished by rememberSaveable { mutableStateOf(false) }
+    var allNew by rememberSaveable { mutableStateOf(false) }
     val home = rememberLoader("podcasts", "Podcasts could not be loaded.") { graph.catalog.shelves(InnerTube.PODCASTS).ifEmpty { null } }
 
     LaunchedEffect(following.map { it.id }) {
@@ -77,27 +80,36 @@ fun PodcastsScreen(graph: AppGraph, player: PlayerConnection) {
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
             )
         }
+        // The listener's own shows first, then where they left off and what is new: a few of
+        // each, with the rest one tap away, so the page does not turn into a long list.
+        if (following.isNotEmpty()) {
+            item { ShelfHeader("Your shows") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(following, key = { it.id }) { show -> Tile(show.coverUrl, show.title, show.author, size = 112.dp) { actions.openPodcast(show) } }
+                }
+            }
+        }
         if (inProgress.isNotEmpty()) {
             item { ShelfHeader("Continue listening") }
-            items(inProgress, key = { "c:" + it.first.videoId }) { (track, fraction) ->
+            items(if (allUnfinished) inProgress else inProgress.take(FEW_UNFINISHED), key = { "c:" + it.first.videoId }) { (track, fraction) ->
                 EpisodeRow(graph, player, track, date = "", fraction = fraction, played = false)
+            }
+            if (!allUnfinished && inProgress.size > FEW_UNFINISHED) {
+                item { ShowMore("Show ${inProgress.size - FEW_UNFINISHED} more") { allUnfinished = true } }
             }
         }
         val newOnes = fresh.orEmpty().filter { progress[it.track.videoId]?.played != true }.take(15)
         if (newOnes.isNotEmpty()) {
             item { ShelfHeader("New episodes") }
-            items(newOnes, key = { "n:" + it.track.videoId }) { e ->
+            items(if (allNew) newOnes else newOnes.take(FEW_NEW), key = { "n:" + it.track.videoId }) { e ->
                 EpisodeRow(graph, player, e.track, e.date, fraction = progressFraction(graph, e.track), played = false)
             }
-        }
-        if (following.isNotEmpty()) {
-            item { ShelfHeader("Your shows") }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(following, key = { it.id }) { show -> Tile(show.coverUrl, show.title, show.author) { actions.openPodcast(show) } }
-                }
+            if (!allNew && newOnes.size > FEW_NEW) {
+                item { ShowMore("Show ${newOnes.size - FEW_NEW} more") { allNew = true } }
             }
-        } else {
+        }
+        if (following.isEmpty()) {
             item {
                 Text(
                     "Follow a show to see its new episodes here. Search for podcasts with the Podcasts filter in Search, or start below.",
@@ -115,10 +127,25 @@ fun PodcastsScreen(graph: AppGraph, player: PlayerConnection) {
                     TextButton(onClick = home.retry) { Text("Try again") }
                 }
             }
-            is Load.Ready -> s.value.forEach { shelf -> item { ShelfRow(shelf, player) } }
+            is Load.Ready -> {
+                // A taste of YouTube Music's podcasts; the whole catalogue is behind one button.
+                s.value.take(FEW_SHELVES).forEach { shelf -> item { ShelfRow(shelf, player) } }
+                if (s.value.size > FEW_SHELVES) {
+                    item { ShowMore("Explore more podcasts") { actions.openBrowse("Podcasts", InnerTube.PODCASTS, "") } }
+                }
+            }
         }
     }
 }
+
+@Composable
+private fun ShowMore(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.padding(horizontal = 8.dp)) { Text(label) }
+}
+
+private const val FEW_UNFINISHED = 3
+private const val FEW_NEW = 5
+private const val FEW_SHELVES = 3
 
 /** The latest episodes of the followed shows, newest first. */
 private suspend fun newEpisodes(graph: AppGraph, shows: List<PodcastRef>): List<Episode> = coroutineScope {

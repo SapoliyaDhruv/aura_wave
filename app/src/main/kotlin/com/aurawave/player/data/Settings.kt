@@ -25,6 +25,17 @@ class Settings(context: Context) {
     /** Look for a newer version of the app once a day, when it opens. */
     val autoUpdateCheck = BoolPref("auto_update_check", true)
 
+    // ---------- look ----------
+
+    /** The background the app is drawn on: the name of a Backdrop ("Dusk", "Black", "Slate"). */
+    val themeBackdrop = StringPref("theme_backdrop", "Dusk")
+    /** Where the accent colour comes from: "Cover" for the playing song's cover, or the name of a fixed colour. */
+    val themeAccent = StringPref("theme_accent", "Cover")
+    /** The library's collections as a grid of covers (true) or as a list. */
+    val libraryGrid = BoolPref("library_grid", true)
+    /** Swiping a song in a list queues it (right) or likes it (left). */
+    val swipeSongs = BoolPref("swipe_songs", true)
+
     // ---------- sound ----------
 
     val eqEnabled = BoolPref("eq_enabled", false)

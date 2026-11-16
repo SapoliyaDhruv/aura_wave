@@ -1,5 +1,10 @@
 package com.aurawave.player.ui
 
+import android.content.Intent
+import android.media.audiofx.AudioEffect
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,14 +101,6 @@ fun PlayerOptionsSheet(graph: AppGraph, player: PlayerConnection, track: Track, 
                         "Equaliser".takeIf { eqOn },
                         "Crossfade ${crossfade}s".takeIf { crossfade > 0 },
                     ).joinToString(", ").ifEmpty { null }
-                    OptionRow(Icons.Rounded.Equalizer, "Sound", soundSummary) { page = OptionsPage.Sound }
-                    OptionRow(
-                        Icons.Rounded.Speed,
-                        if (isEpisode) "Podcast speed" else "Speed and pitch",
-                        if (speed == 1f && pitch == 1f) "Normal" else "${formatRate(speed)}×" + if (pitch != 1f) ", pitch ${formatRate(pitch)}" else "",
-                    ) { page = OptionsPage.Speed }
-                    OptionRow(Icons.Rounded.Bedtime, "Sleep timer", sleepLabel ?: "Off") { page = OptionsPage.Sleep }
-                    if (!isEpisode) OptionRow(Icons.Rounded.FindReplace, "Not the right song?", null) { page = OptionsPage.Alternatives }
                     val download = LocalDownloads.current[track.videoId]
                     OptionRow(
                         Icons.Rounded.Download,
@@ -134,6 +132,16 @@ fun PlayerOptionsSheet(graph: AppGraph, player: PlayerConnection, track: Track, 
                             actions.openAlbum(AlbumRef(track.albumId, track.album, track.artist, coverUrl = track.coverUrl))
                         }
                     }
+                    // Below the line: things set once in a while rather than every day.
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), color = Palette.Line)
+                    OptionRow(Icons.Rounded.Bedtime, "Sleep timer", sleepLabel ?: "Off") { page = OptionsPage.Sleep }
+                    OptionRow(Icons.Rounded.Equalizer, "Sound", soundSummary) { page = OptionsPage.Sound }
+                    OptionRow(
+                        Icons.Rounded.Speed,
+                        if (isEpisode) "Podcast speed" else "Speed and pitch",
+                        if (speed == 1f && pitch == 1f) "Normal" else "${formatRate(speed)}×" + if (pitch != 1f) ", pitch ${formatRate(pitch)}" else "",
+                    ) { page = OptionsPage.Speed }
+                    if (!isEpisode) OptionRow(Icons.Rounded.FindReplace, "Not the right song?", null) { page = OptionsPage.Alternatives }
                 }
                 OptionsPage.Sleep -> SleepPage(graph.sleepTimer, onBack = { page = OptionsPage.Main }, onDone = onDismiss)
                 OptionsPage.Sound -> SoundPage(graph, onBack = { page = OptionsPage.Main })
@@ -217,6 +225,8 @@ private fun SoundPage(graph: AppGraph, onBack: () -> Unit) {
         onChange = { settings.skipSilence.value = it },
     )
 
+    PhoneSoundEffects(graph)
+
     val eq = info
     if (eq != null && (eq.bandsHz.isNotEmpty() || eq.hasBassBoost)) {
         SwitchSetting(
@@ -279,6 +289,32 @@ private fun SoundPage(graph: AppGraph, onBack: () -> Unit) {
     } else if (eq != null) {
         Hint("This phone has no built-in equaliser that apps can use.")
     }
+}
+
+/**
+ * Opens the phone's own sound panel for this app's music: Dolby Atmos, the maker's equaliser
+ * and whatever else the phone has. Those effects belong to the phone, so the app can only
+ * open the door to them. Shown only on phones that have such a panel.
+ */
+@Composable
+private fun PhoneSoundEffects(graph: AppGraph) {
+    val context = LocalContext.current
+    val session by graph.sound.audioSession.collectAsStateWithLifecycle()
+    val intent = remember(session) {
+        Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
+            .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+            .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+            .apply { if (session > 0) putExtra(AudioEffect.EXTRA_AUDIO_SESSION, session) }
+    }
+    val available = remember { intent.resolveActivity(context.packageManager) != null }
+    if (!available) return
+    // The panel must be opened "for a result", though it has none to give.
+    val panel = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
+    ActionSetting(
+        title = "Phone sound effects",
+        body = "Dolby Atmos and the other effects built into your phone",
+        onClick = { runCatching { panel.launch(intent) } },
+    )
 }
 
 @Composable

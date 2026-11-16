@@ -81,7 +81,7 @@ fun ShelfHeader(title: String, onMore: (() -> Unit)? = null) {
 
 @Composable
 fun Tile(coverUrl: String?, title: String, subtitle: String, round: Boolean = false, size: Dp = 140.dp, onClick: () -> Unit) {
-    Column(Modifier.width(size).clickable(onClickLabel = "Open $title", onClick = onClick)) {
+    Column(Modifier.width(size).pressable(onClickLabel = "Open $title", onClick = onClick)) {
         Artwork(coverUrl, size, corner = if (round) size / 2 else 10.dp)
         Spacer(Modifier.height(8.dp))
         Text(
@@ -124,7 +124,7 @@ fun ArtistTile(artist: ArtistSummary, onClick: () -> Unit) =
 
 @Composable
 fun MixTile(mix: Mix, onClick: () -> Unit) {
-    Column(Modifier.width(150.dp).clickable(onClickLabel = "Open ${mix.name}", onClick = onClick)) {
+    Column(Modifier.width(150.dp).pressable(onClickLabel = "Open ${mix.name}", onClick = onClick)) {
         CoverMosaic(mix.picks.map { it.track.coverUrl }, 150.dp)
         Spacer(Modifier.height(8.dp))
         Text(mix.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

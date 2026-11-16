@@ -41,15 +41,52 @@ import kotlinx.coroutines.withContext
  * taken from the playing song's cover. Carried over from the web app's design system.
  */
 object Palette {
-    val Ink = Color(0xFF14101B)
-    val Dusk = Color(0xFF1D1826)
-    val Raised = Color(0xFF282133)
+    /** The background in use. Changing it redraws everything that reads the three surface colours below. */
+    var backdrop by mutableStateOf(Backdrop.Dusk)
+
+    val Ink: Color get() = backdrop.ink
+    val Dusk: Color get() = backdrop.dusk
+    val Raised: Color get() = backdrop.raised
     val Line = Color(0x17F3EFF8)
     val Moon = Color(0xFFF3EFF8)
     val Haze = Color(0xFFA69EB4)
     val Faint = Color(0xFF776F87)
     val OnAura = Color(0xFF17111F)
     val Danger = Color(0xFFFF9B9B)
+}
+
+/** The surfaces the app is drawn on: the page, bars and sheets, and raised things such as cards and fields. */
+enum class Backdrop(val label: String, val ink: Color, val dusk: Color, val raised: Color) {
+    /** The app's own: ink with a little violet in it. */
+    Dusk("Dusk", Color(0xFF14101B), Color(0xFF1D1826), Color(0xFF282133)),
+
+    /** True black, which is also the kindest to an OLED screen's battery. */
+    Black("Black", Color(0xFF000000), Color(0xFF0E0D12), Color(0xFF1B1921)),
+
+    /** A cool blue-grey. */
+    Slate("Slate", Color(0xFF0E1317), Color(0xFF161C22), Color(0xFF212A32));
+
+    companion object {
+        fun named(name: String): Backdrop = entries.firstOrNull { it.name == name } ?: Dusk
+    }
+}
+
+/** The accent colour: taken from the playing song's cover, or one colour that stays. */
+enum class Accent(val label: String, private val hue: Float, private val saturation: Float) {
+    Cover("From the cover", 0f, 0f),
+    Violet("Violet", 275f, 0.85f),
+    Rose("Rose", 340f, 0.8f),
+    Amber("Amber", 38f, 0.85f),
+    Mint("Mint", 160f, 0.55f),
+    Sky("Sky", 205f, 0.8f);
+
+    /** The fixed colours, or null for [Cover]. */
+    val aura: Aura?
+        get() = if (this == Cover) null else Aura(Color.hsl(hue, saturation, 0.74f), Color.hsl(hue, minOf(0.6f, saturation), 0.2f))
+
+    companion object {
+        fun named(name: String): Accent = entries.firstOrNull { it.name == name } ?: Cover
+    }
 }
 
 data class Aura(val accent: Color, val deep: Color) {
@@ -100,9 +137,10 @@ private val AuraType: Typography = Typography().let { t ->
  * only the few places that draw with it are redrawn while it eases, not every screen.
  */
 @Composable
-fun AuraTheme(coverUrl: String?, content: @Composable () -> Unit) {
-    val target = rememberAuraOf(coverUrl)
-    val scheme = remember(target) {
+fun AuraTheme(coverUrl: String?, fixed: Aura? = null, content: @Composable () -> Unit) {
+    val fromCover = rememberAuraOf(coverUrl)
+    val target = fixed ?: fromCover
+    val scheme = remember(target, Palette.backdrop) {
         darkColorScheme(
             primary = target.accent,
             onPrimary = Palette.OnAura,

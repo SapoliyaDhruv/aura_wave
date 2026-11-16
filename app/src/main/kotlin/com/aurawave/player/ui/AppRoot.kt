@@ -15,6 +15,13 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -40,7 +47,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -65,7 +71,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -180,11 +185,15 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     val pages = rememberSaveableStateHolder()
     val closePage: () -> Unit = { stack.close()?.let { pages.removeState(it.key) } }
     val openTab: (Tab) -> Unit = { t ->
+        // Search pressed while Search is already showing: straight to typing.
+        if (t == Tab.Search && tab == Tab.Search && stack.isEmpty) search.askForFocus()
         stack.closeAll().forEach { pages.removeState(it.key) }
         tab = t
     }
 
-    AuraTheme(player.current?.mediaMetadata?.artworkUri?.toString()) {
+    val accent by graph.settings.themeAccent.flow.collectAsStateWithLifecycle()
+    val swipeSongs by graph.settings.swipeSongs.flow.collectAsStateWithLifecycle()
+    AuraTheme(player.current?.mediaMetadata?.artworkUri?.toString(), fixed = Accent.named(accent).aura) {
         CompositionLocalProvider(
             LocalLikedIds provides likedIds,
             LocalLibrary provides graph.library,
@@ -192,6 +201,7 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
             LocalSongActions provides actions,
             LocalDownloads provides downloads,
             LocalIsPlaying provides (player.playing && !player.buffering),
+            LocalSwipeSongs provides swipeSongs,
         ) {
             // Once a day, quietly: is there a newer version to offer?
             var updateOffer by remember { mutableStateOf<Release?>(null) }
@@ -234,7 +244,18 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                 exit = fadeOut(tween(160)) + shrinkVertically(tween(220)),
                             ) {
                                 CompositionLocalProvider(LocalSharedScope provides sharedScope, LocalVisibilityScope provides this) {
-                                    MiniPlayer(player, onOpen = { nowPlayingOpen = true })
+                                    MiniPlayer(
+                                        player,
+                                        onOpen = { nowPlayingOpen = true },
+                                        onStop = {
+                                            val stopped = player.stopAll()
+                                            scope.launch {
+                                                snackbar.currentSnackbarData?.dismiss()
+                                                val answer = snackbar.showSnackbar("Playback stopped", actionLabel = "Undo", duration = SnackbarDuration.Short)
+                                                if (answer == SnackbarResult.ActionPerformed && stopped != null) player.restore(stopped)
+                                            }
+                                        },
+                                    )
                                 }
                             }
                             NavigationBar(containerColor = Palette.Dusk) {
@@ -257,7 +278,7 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                         }
                     },
                 ) { padding ->
-                    Box(Modifier.padding(padding).fillMaxSize()) {
+                    Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
                         val top = stack.top
                         AnimatedContent(
                             targetState = Shown(top?.key ?: "tab:${tab.name}", top?.screen, tab, stack.pages.size),
@@ -280,7 +301,7 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                     Screen.Login -> LoginScreen(graph, onBack = closePage)
                                     Screen.Stats -> StatsScreen(graph, player, onBack = closePage)
                                     null -> when (page.tab) {
-                                        Tab.Home -> HomeScreen(graph, player, onOpenSearch = { tab = Tab.Search })
+                                        Tab.Home -> HomeScreen(graph, player, onOpenSearch = { tab = Tab.Search; search.askForFocus() })
                                         Tab.Search -> SearchScreen(search, player, onOpenArtist = actions.openArtist)
                                         Tab.Podcasts -> PodcastsScreen(graph, player)
                                         Tab.Library -> LibraryScreen(
@@ -315,22 +336,37 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     }
 }
 
+/**
+ * The playing song, above the tabs. Tap it or swipe it up to open the player; swipe it down
+ * to stop the music and put it away; swipe left for the next song and right for the
+ * previous one. Its lower edge is the song's progress, as a small wave.
+ */
 @Composable
-private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit) {
+private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit, onStop: () -> Unit) {
     val item = player.current ?: return
     val meta = item.mediaMetadata
     val position = rememberPositionMs(player)
-    // Swipe left for the next song, right for the previous one.
+    val aura = LocalAura.current
     val offset = remember { Animatable(0f) }
+    val lift = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val threshold = with(LocalDensity.current) { 96.dp.toPx() }
+    val density = LocalDensity.current
+    val threshold = with(density) { 96.dp.toPx() }
+    val openAt = with(density) { 14.dp.toPx() }
+    val maxLift = with(density) { 28.dp.toPx() }
+    val stopAt = with(density) { 30.dp.toPx() }
+    val maxDrop = with(density) { 56.dp.toPx() }
+    val shape = RoundedCornerShape(18.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .graphicsLayer {
                 translationX = offset.value
-                alpha = 1f - (kotlin.math.abs(offset.value) / (threshold * 3)).coerceIn(0f, 0.6f)
+                translationY = lift.value
+                // Sideways it fades a little; on the way down it fades out, as it is on its way out.
+                alpha = (1f - (kotlin.math.abs(offset.value) / (threshold * 3)).coerceIn(0f, 0.6f)) *
+                    (1f - (lift.value / maxDrop).coerceIn(0f, 1f) * 0.85f)
             }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
@@ -351,15 +387,42 @@ private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit) {
                     },
                 )
             }
-            .clip(RoundedCornerShape(12.dp))
+            .pointerInput(Unit) {
+                // Up, it rises a little with the finger and the player takes over. Down, it sinks
+                // behind the tabs and the music stops.
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        when {
+                            lift.value <= -openAt -> onOpen()
+                            lift.value >= stopAt -> onStop()
+                        }
+                        scope.launch { lift.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow)) }
+                    },
+                    onDragCancel = { scope.launch { lift.animateTo(0f) } },
+                    onVerticalDrag = { change, amount ->
+                        change.consume()
+                        scope.launch { lift.snapTo((lift.value + amount * 0.5f).coerceIn(-maxLift, maxDrop)) }
+                    },
+                )
+            }
+            .clip(shape)
+            // The song's colour comes in from the cover's side and fades into the bar.
             .background(Palette.Raised)
+            .background(Brush.horizontalGradient(listOf(aura.deep.copy(alpha = 0.85f), aura.deep.copy(alpha = 0.25f))))
+            .border(1.dp, Palette.Line, shape)
             .clickable(onClickLabel = "Open player", onClick = onOpen),
     ) {
-        Row(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 10.dp, top = 10.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(meta.artworkUri?.toString(), MINI_COVER, Modifier.playerCover())
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(meta.title?.toString().orEmpty(), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    meta.title?.toString().orEmpty(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     meta.artist?.toString().orEmpty(),
                     style = MaterialTheme.typography.bodyMedium,
@@ -369,21 +432,19 @@ private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit) {
                 )
             }
             IconButton(onClick = player::togglePlay, modifier = Modifier.semantics { contentDescription = if (player.playing) "Pause" else "Play" }) {
-                PlayPauseIcon(player.playing, Modifier.size(26.dp))
+                PlayPauseIcon(player.playing, Modifier.size(28.dp))
             }
             IconButton(onClick = player::next) {
                 Icon(Icons.Rounded.SkipNext, contentDescription = "Next song")
             }
         }
-        val fraction = if (player.durationMs > 0) (position.toFloat() / player.durationMs).coerceIn(0f, 1f) else 0f
-        LinearProgressIndicator(
-            progress = { fraction },
-            modifier = Modifier.fillMaxWidth().height(2.dp),
-            color = LocalAura.current.accent,
-            trackColor = Palette.Line,
-            strokeCap = StrokeCap.Butt,
-            gapSize = 0.dp,
-            drawStopIndicator = {},
+        WaveProgress(
+            positionMs = position,
+            durationMs = player.durationMs,
+            playing = player.playing && !player.buffering,
+            color = aura.accent,
+            livePositionMs = { player.positionMs },
+            modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 4.dp),
         )
     }
 }

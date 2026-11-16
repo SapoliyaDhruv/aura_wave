@@ -9,6 +9,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -74,6 +76,7 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
     val building by graph.recommender.building.collectAsStateWithLifecycle()
     val offline by graph.recommender.offline.collectAsStateWithLifecycle()
     var local by remember { mutableStateOf<LocalShelves?>(null) }
+    val unfinished by graph.library.inProgress.collectAsStateWithLifecycle(initialValue = emptyList())
     val actions = LocalSongActions.current
 
     LaunchedEffect(Unit) { graph.recommender.refresh() }
@@ -102,37 +105,36 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
                 RefreshButton(building) { graph.recommender.refresh(force = true) }
             }
         }
+        // The page is kept short on purpose: where the listener left off, one big mix, one row
+        // of everything made for them, and a handful of new songs. The full history is in Library.
+        if (recentList.isNotEmpty()) {
+            item {
+                // Taken once per visit, so the cards do not reshuffle each time a song changes.
+                val quick = remember(recentList.size.coerceAtMost(QUICK_SHOWN)) { recentList.take(QUICK_SHOWN) }
+                JumpBackIn(quick, player)
+            }
+        }
+
+        unfinished.firstOrNull()?.let { (episode, fraction) ->
+            item(key = "continue") { ContinueEpisode(episode, fraction, player) }
+        }
+
         f?.hero?.let { hero -> item { HeroCard(hero, player) } }
 
-        if (recentList.isNotEmpty()) {
-            item { ShelfHeader("Recently played") }
-            item {
-                val shown = recentList.take(12)
-                val rowState = rememberLazyListState()
-                // A newly played song joins at the front: bring the row back to the start to show it.
-                LaunchedEffect(shown.firstOrNull()?.videoId) { rowState.scrollToItem(0) }
-                LazyRow(state = rowState, contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    itemsIndexed(shown, key = { _, t -> t.videoId }) { i, track -> SongTile(track) { player.play(shown, i) } }
-                }
+        // Every mix in one row: the ones built from radio, and the ones from the listener's own history.
+        val made = buildList {
+            f?.mixes?.let(::addAll)
+            if (f?.becauseSeed != null && f.because.isNotEmpty()) {
+                add(Mix("because", "Because you played ${shortTitle(f.becauseSeed.title)}", "Often played after it", f.because))
             }
+            local?.onRepeat?.takeIf { it.size >= 3 }?.let { add(Mix("on-repeat", "On repeat", "What you keep coming back to", it)) }
+            local?.rediscover?.takeIf { it.size >= 3 }?.let { add(Mix("rediscover", "Rediscover", "Loved a while ago", it)) }
         }
-
-        if (!f?.mixes.isNullOrEmpty()) {
-            item { ShelfHeader("Your mixes") }
+        if (made.isNotEmpty()) {
+            item { ShelfHeader("Made for you") }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(f!!.mixes, key = { it.id }) { mix -> MixTile(mix) { actions.openMix(mix) } }
-                }
-            }
-        }
-
-        local?.onRepeat?.takeIf { it.size >= 3 }?.let { picks -> item { PickRow("On repeat", picks, player) } }
-
-        if (f != null && f.becauseSeed != null && f.because.isNotEmpty()) {
-            val title = "Because you played ${shortTitle(f.becauseSeed.title)}"
-            item {
-                PickRow(title, f.because, player, showReason = false) {
-                    actions.openMix(Mix("because", title, "Often played after it", f.because))
+                    items(made, key = { it.id }) { mix -> MixTile(mix) { actions.openMix(mix) } }
                 }
             }
         }
@@ -150,8 +152,6 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
             }
             pickRows(fresh.take(FRESH_SHOWN), graph, player)
         }
-
-        local?.rediscover?.takeIf { it.size >= 3 }?.let { picks -> item { PickRow("Rediscover", picks, player) } }
 
         if (f == null && building) item { LoadingBox() }
         if (f == null && offline && !building) {
@@ -181,17 +181,97 @@ private fun androidx.compose.foundation.lazy.LazyListScope.pickRows(picks: List<
     }
 }
 
+/** The last few songs, two to a row and small: seen at a glance, played with one tap. */
 @Composable
-private fun PickRow(title: String, picks: List<Pick>, player: PlayerConnection, showReason: Boolean = true, onMore: (() -> Unit)? = null) {
-    val tracks = picks.map { it.track }
-    ShelfHeader(title, onMore)
-    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        itemsIndexed(picks, key = { _, p -> p.track.videoId }) { i, pick ->
-            SongTile(pick.track, subtitle = if (showReason) pick.reason else pick.track.artist) { player.play(tracks, i) }
+private fun JumpBackIn(tracks: List<Track>, player: PlayerConnection) {
+    val currentId = player.current?.mediaId
+    Column(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        tracks.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pair.forEach { track ->
+                    QuickCard(track, isCurrent = track.videoId == currentId, modifier = Modifier.weight(1f)) {
+                        player.play(tracks, tracks.indexOf(track))
+                    }
+                }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
         }
     }
 }
 
+@Composable
+private fun QuickCard(track: Track, isCurrent: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier
+            .pressable(onClickLabel = "Play ${track.title}", onClick = onClick)
+            .height(56.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Palette.Raised),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Artwork(track.coverUrl, 56.dp, corner = 0.dp)
+            if (isCurrent) {
+                Box(Modifier.size(56.dp).background(Palette.Ink.copy(alpha = 0.55f)))
+                PlayingBars(moving = LocalIsPlaying.current, modifier = Modifier.size(18.dp))
+            }
+        }
+        Text(
+            shortTitle(track.title),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
+    }
+}
+
+/** The podcast episode the listener is part-way through, so picking it up again does not mean changing tabs. */
+@Composable
+private fun ContinueEpisode(episode: Track, fraction: Float, player: PlayerConnection) {
+    val isCurrent = player.current?.mediaId == episode.videoId
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .padding(top = 12.dp)
+            .fillMaxWidth()
+            .pressable(onClickLabel = "Continue ${episode.title}") {
+                if (isCurrent) player.togglePlay() else player.play(listOf(episode))
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .background(Palette.Raised),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Artwork(episode.coverUrl, 52.dp, corner = 8.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Continue listening", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text(episode.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (episode.album.isNotEmpty()) {
+                    Text(
+                        episode.album,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                PlayPauseIcon(isCurrent && player.playing, Modifier.size(20.dp), color = Palette.OnAura)
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+        Box(Modifier.fillMaxWidth().height(3.dp).background(Palette.Line)) {
+            Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(3.dp).background(MaterialTheme.colorScheme.primary))
+        }
+    }
+}
+
+private const val QUICK_SHOWN = 6
 private const val FRESH_SHOWN = 5
 
 /** The day's main mix, large, with its covers and play buttons. */

@@ -39,6 +39,9 @@ class SoundState {
 
     /** The levelling applied to the playing song, in dB, for the Sound sheet to show. */
     val levelDb = MutableStateFlow<Double?>(null)
+
+    /** The player's audio session (0 until it has one), so the phone's own sound effects can be opened for it. */
+    val audioSession = MutableStateFlow(0)
 }
 
 /**
@@ -90,7 +93,7 @@ class SoundEngine(
             }.collect { player.playbackParameters = it }
         }
         scope.launch { settings.skipSilence.flow.collect { player.skipSilenceEnabled = it } }
-        scope.launch { settings.levelling.flow.collect { levelFor(player.currentMediaItem?.mediaId) } }
+        scope.launch { settings.levelling.flow.collect { levelFor(player.currentMediaItem?.streamId) } }
     }
 
     /** The player's audio session changed (it can when the audio output is rebuilt). */
@@ -98,6 +101,7 @@ class SoundEngine(
         if (newSession == sessionId || newSession == C.AUDIO_SESSION_ID_UNSET) return
         releaseEffects()
         sessionId = newSession
+        state.audioSession.value = newSession
         equalizer = runCatching { Equalizer(0, newSession) }.getOrNull()
         bass = runCatching { BassBoost(0, newSession) }.getOrNull()?.takeIf { it.strengthSupported }
         enhancer = runCatching { LoudnessEnhancer(newSession) }.getOrNull()
@@ -173,7 +177,7 @@ class SoundEngine(
         levelJob = scope.launch {
             val gain = loudness.gainDb(videoId) ?: 0.0
             gains[videoId] = gain
-            if (player.currentMediaItem?.mediaId == videoId) setLevel(gain)
+            if (player.currentMediaItem?.streamId == videoId) setLevel(gain)
         }
     }
 

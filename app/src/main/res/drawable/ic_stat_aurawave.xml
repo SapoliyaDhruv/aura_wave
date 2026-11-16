@@ -1,24 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Status-bar version of the mark: the same paths, cropped to the mark and drawn in white. -->
+<!-- Status-bar version of the mark: the same shapes, cropped to the mark and drawn in white. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="64"
     android:viewportHeight="64">
     <group
-        android:translateX="-22"
-        android:translateY="-22">
+        android:translateX="-23"
+        android:translateY="-24.5">
+        <group
+            android:pivotX="40"
+            android:pivotY="72"
+            android:rotation="-22">
+            <path android:pathData="M30.5,72a9.5,7.2 0 1,0 19.0,0a9.5,7.2 0 1,0 -19.0,0z"
+            android:fillColor="#FFFFFF" />
+        </group>
+        <group
+            android:pivotX="68"
+            android:pivotY="66"
+            android:rotation="-22">
+            <path android:pathData="M58.5,66a9.5,7.2 0 1,0 19.0,0a9.5,7.2 0 1,0 -19.0,0z"
+            android:fillColor="#FFFFFF" />
+        </group>
         <path
-            android:pathData="M35,76L54,32L73,76"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="7"
+            android:pathData="M48.2,70L48.2,40"
+            android:strokeWidth="6"
             android:strokeLineCap="round"
-            android:strokeLineJoin="round" />
+            android:strokeLineJoin="round"
+            android:strokeColor="#FFFFFF" />
         <path
-            android:pathData="M27,64C35,56 45,56 54,64S73,72 81,64"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="7"
+            android:pathData="M76.2,64L76.2,36"
+            android:strokeWidth="6"
             android:strokeLineCap="round"
-            android:strokeLineJoin="round" />
+            android:strokeLineJoin="round"
+            android:strokeColor="#FFFFFF" />
+        <path
+            android:pathData="M48.2,40C55,33 60,33 62.2,38C64.5,43 70,43 76.2,36"
+            android:strokeWidth="6.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeColor="#FFFFFF" />
     </group>
 </vector>

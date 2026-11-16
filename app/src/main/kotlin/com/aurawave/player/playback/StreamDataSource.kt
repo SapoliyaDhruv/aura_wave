@@ -72,6 +72,15 @@ class StreamUrlCache(
         chosen[videoId] = quality
     }
 
+    private val badVideos = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Music videos that would not play this session, so the Song/Video switch stops offering them. */
+    val unplayableVideos: StateFlow<Set<String>> = badVideos.asStateFlow()
+
+    fun videoFailed(videoId: String) {
+        badVideos.update { it + videoId }
+    }
+
     private val origins = MutableStateFlow<Map<String, String>>(emptyMap())
 
     /** Songs playing from somewhere other than the usual route, by video id, and where from ("JioSaavn"). */

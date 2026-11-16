@@ -11,6 +11,13 @@
     <!-- Downloads waiting for Wi-Fi are rescheduled after a restart. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- To know whether the phone has its own sound effects panel (Dolby Atmos and the like) to open. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+        </intent>
+    </queries>
+
     <application
         android:name=".AuraApp"
         android:allowBackup="true"

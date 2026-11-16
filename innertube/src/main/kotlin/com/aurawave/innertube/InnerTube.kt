@@ -302,6 +302,16 @@ class InnerTube(
             .filter { Match.versionFlags(it.title).isEmpty() }
     }
 
+    /** One recording by its id, as YouTube Music describes it; null when it has none by that id. */
+    suspend fun song(videoId: String): Track? {
+        val data = call("next") {
+            put("videoId", videoId)
+            put("isAudioOnly", true)
+            put("enablePersistentPlaylistPanel", true)
+        }
+        return data.collect("playlistPanelVideoRenderer").map(::parsePanelItem).uniqueById().firstOrNull { it.videoId == videoId }
+    }
+
     suspend fun artist(id: String = "", name: String = ""): ArtistPage? {
         val artistId = id.ifEmpty { if (name.isNotEmpty()) searchArtists(name, 1).firstOrNull()?.id.orEmpty() else "" }
         if (artistId.isEmpty()) return null
@@ -817,6 +827,20 @@ class InnerTube(
 
         val best = songs.firstOrNull()
         return Resolution(null, bestRejected = best?.let { "${it.first.title} by ${it.first.artist}: ${it.second.reason}" }.orEmpty())
+    }
+
+    /** The official music video of a song, when YouTube Music has one that matches it. */
+    suspend fun musicVideoFor(track: Track): Track? {
+        if (track.kind != Kind.SONG) return null
+        val lead = track.artists.firstOrNull()?.name ?: track.artist.split(',', '&').first().trim()
+        // The video of a song is often cut differently (an intro, a scene), so its length is not compared.
+        val want = Match.Want(track.title, track.artist, 0)
+        return searchSongs("${track.title} $lead".trim(), FILTER_VIDEOS)
+            .filter { it.kind == Kind.VIDEO && Match.titleSimilarity(track.title, it.title) >= 0.6 }
+            .map { it to Match.scoreCandidate(want, Match.Candidate(it.title, it.artist, it.album, it.durationSec, it.kind, channel = it.artist)) }
+            .filter { it.second.accept }
+            .maxByOrNull { it.second.score }
+            ?.first
     }
 
     companion object {
