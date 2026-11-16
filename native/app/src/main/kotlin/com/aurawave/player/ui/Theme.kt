@@ -21,6 +21,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.util.LruCache
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import coil3.SingletonImageLoader
@@ -139,22 +143,52 @@ private fun DriftingAura(target: Aura, content: @Composable () -> Unit) {
 
 private const val AURA_DRIFT_MS = 1200
 
-/** The accent for a cover image; the default until the cover has been read. */
+/** The accent for the playing song's cover; the default until the cover has been read. */
 @Composable
 private fun rememberAuraOf(coverUrl: String?): Aura {
+    val last = remember { arrayOf(Aura.Default) }
+    val picture = if (coverUrl.isNullOrEmpty()) "" else InnerTube.bigCover(coverUrl, 96)
+    rememberCoverAura(picture)?.let { last[0] = it } // a song without a readable cover keeps the last song's colour
+    return last[0]
+}
+
+/** Colours already worked out, by picture address, so each cover is read once. */
+private val auraMemory = LruCache<String, Aura>(300)
+
+/**
+ * The colours of any cover, for tinting the page it heads. [picture] should be an address
+ * the screen is showing anyway: the image then comes from memory, with no extra download.
+ * Null until it has been read, and for a picture that cannot be loaded.
+ */
+@Composable
+fun rememberCoverAura(picture: String): Aura? {
     val context = LocalContext.current
-    var target by remember { mutableStateOf(Aura.Default) }
-    LaunchedEffect(coverUrl) {
-        if (coverUrl.isNullOrEmpty()) return@LaunchedEffect
-        val request = ImageRequest.Builder(context)
-            .data(InnerTube.bigCover(coverUrl, 96))
-            .size(48)
-            .allowHardware(false)
-            .build()
+    var aura by remember(picture) { mutableStateOf(auraMemory.get(picture)) }
+    LaunchedEffect(picture) {
+        if (aura != null || picture.isEmpty()) return@LaunchedEffect
+        val request = ImageRequest.Builder(context).data(picture).size(48).allowHardware(false).build()
         val image = (SingletonImageLoader.get(context).execute(request) as? SuccessResult)?.image ?: return@LaunchedEffect
-        target = withContext(Dispatchers.Default) { auraOf(image.toBitmap()) }
+        val found = withContext(Dispatchers.Default) { auraOf(image.toBitmap()) }
+        auraMemory.put(picture, found)
+        aura = found
     }
-    return target
+    return aura
+}
+
+/**
+ * A soft band of a cover's colour behind the top of a page. Draws nothing until the colour
+ * is known, then fades it in.
+ */
+@Composable
+fun Modifier.coverGlow(picture: String): Modifier {
+    val aura = rememberCoverAura(picture)
+    val tint = animateColorAsState(aura?.deep ?: Color.Transparent, tween(600), label = "coverGlow")
+    return drawBehind {
+        val colour = tint.value
+        if (colour.alpha > 0f) {
+            drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.3f to colour.copy(alpha = colour.alpha * 0.85f), 1f to Color.Transparent))
+        }
+    }
 }
 
 /**

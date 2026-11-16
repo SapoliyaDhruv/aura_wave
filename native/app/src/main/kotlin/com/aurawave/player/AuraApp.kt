@@ -17,6 +17,8 @@ import android.net.ConnectivityManager
 import androidx.room.Room
 import com.aurawave.innertube.Lrclib
 import com.aurawave.player.data.Catalog
+import com.aurawave.player.data.CrashLog
+import com.aurawave.player.data.Updates
 import com.aurawave.player.data.Library
 import com.aurawave.player.data.ListenLog
 import com.aurawave.player.data.LyricsStore
@@ -50,6 +52,9 @@ class AuraApp : Application() {
 /** The app's long-lived objects, shared by the screens and the playback service. */
 @OptIn(UnstableApi::class)
 class AppGraph(context: Context) {
+    /** First, so a crash while the rest of the app is being set up is recorded too. */
+    val crashLog = CrashLog(context).also { it.install() }
+
     val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -71,6 +76,7 @@ class AppGraph(context: Context) {
     val importer = PlaylistImporter(library, catalog, Spotify(http), scope)
     val recommender = Recommender(context, library, catalog, settings, scope)
     val account = Account(context, tube, library, settings, scope)
+    val updates = Updates(context, http, settings, scope)
 
     val sleepTimer = SleepTimer()
     val queueStore = QueueStore(context.filesDir)

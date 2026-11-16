@@ -179,7 +179,11 @@ data class PlaylistSummary(
     @Embedded val playlist: PlaylistRow,
     val songCount: Int,
     val coverUrl: String?,
-)
+    /** The covers of the first few songs, one per line, for a playlist's four-cover picture. */
+    val covers: String?,
+) {
+    val coverList: List<String> get() = covers?.split('\n')?.filter { it.isNotEmpty() }.orEmpty()
+}
 
 /** Plays per song over a period, for statistics and recommendations. */
 data class SongPlays(
@@ -345,7 +349,10 @@ abstract class LibraryDao {
         SELECT p.*,
             (SELECT COUNT(*) FROM playlist_songs ps WHERE ps.playlistId = p.id) AS songCount,
             (SELECT s.coverUrl FROM playlist_songs ps JOIN songs s ON s.videoId = ps.videoId
-                WHERE ps.playlistId = p.id ORDER BY ps.position LIMIT 1) AS coverUrl
+                WHERE ps.playlistId = p.id ORDER BY ps.position LIMIT 1) AS coverUrl,
+            (SELECT GROUP_CONCAT(c, char(10)) FROM (
+                SELECT s.coverUrl AS c FROM playlist_songs ps JOIN songs s ON s.videoId = ps.videoId
+                WHERE ps.playlistId = p.id ORDER BY ps.position LIMIT 8)) AS covers
         FROM playlists p ORDER BY p.updatedAt DESC
         """,
     )

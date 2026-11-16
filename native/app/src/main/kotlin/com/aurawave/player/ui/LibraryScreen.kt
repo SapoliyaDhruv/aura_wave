@@ -70,6 +70,7 @@ import com.aurawave.player.playback.PlayerConnection
 import kotlinx.coroutines.launch
 
 private enum class Shelf(val label: String) {
+    Overview("Overview"),
     Liked("Liked songs"),
     Playlists("Playlists"),
     Albums("Albums"),
@@ -86,7 +87,7 @@ fun LibraryScreen(
     onOpenSettings: () -> Unit,
     onOpenStats: () -> Unit,
 ) {
-    var shelf by rememberSaveable { mutableStateOf(Shelf.Liked) }
+    var shelf by rememberSaveable { mutableStateOf(Shelf.Overview) }
     val liked by graph.library.liked.collectAsStateWithLifecycle(initialValue = null)
     val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
     val playlists by graph.library.playlists.collectAsStateWithLifecycle(initialValue = null)
@@ -120,6 +121,18 @@ fun LibraryScreen(
         }
 
         when (shelf) {
+            Shelf.Overview -> LibraryOverview(
+                graph = graph,
+                liked = liked,
+                history = history,
+                playlists = playlists,
+                onOpenLiked = { shelf = Shelf.Liked },
+                onOpenHistory = { shelf = Shelf.History },
+                onOpenDownloads = { shelf = Shelf.Downloads },
+                onOpenAlbums = { shelf = Shelf.Albums },
+                onOpenArtists = { shelf = Shelf.Artists },
+                onOpenPlaylist = onOpenPlaylist,
+            )
             Shelf.Liked -> SongShelf(
                 songs = liked,
                 player = player,

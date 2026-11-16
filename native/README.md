@@ -95,11 +95,28 @@ app/         The Android app (Jetpack Compose + Media3).
   data/Recommender.kt           the Home feed (ported from the old app's recommender.js)
   data/Backup.kt                backup/restore; also reads the old app's backup files
   data/Account.kt               YouTube Music sync
+  data/Updates.kt               looks for a newer version among the GitHub releases
+  data/CrashLog.kt              keeps the last crash, to share from Settings
   ui/                           the screens
   ui/Motion.kt                  the app's animations: the cover travelling into the player, page changes, play/pause, the heart
 ```
 
-## Licence note
+## Publishing a new version
 
-NewPipeExtractor is GPL-3.0. An app that includes it must be distributed under the GPL too.
+The app looks for updates among this repository's GitHub releases (`data/Updates.kt`), once a
+day and from Settings › Check for updates.
+
+1. Raise `versionCode` and `versionName` in `app/build.gradle.kts` and build the release APK.
+2. On GitHub, create a release tagged with the version, like `v3.0.1`, and attach
+   `app-release.apk`. What you write in the release's description is shown in the app as
+   what changed.
+
+Phones on an older version then offer the new one. A release must be signed with the same
+key as the installed app, or Android refuses to install it over the old one.
+
+## Licence
+
+AuraWave is free software under the GNU General Public License, version 3 (`LICENSE`). It
+includes NewPipeExtractor, which is GPL-3.0, so it has to be: anyone you give the APK to
+may also have the source, and may share and change it under the same licence.
 The Bricolage Grotesque and Figtree fonts are under the SIL Open Font License; see `licenses/`.

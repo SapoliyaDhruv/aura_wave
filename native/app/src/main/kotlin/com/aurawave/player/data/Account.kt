@@ -36,7 +36,8 @@ class Account(
     private val scope: CoroutineScope,
 ) {
     sealed interface Sync {
-        data class Idle(val lastSyncedAt: Long) : Sync
+        /** [note]: something the listener should know about the last sync, or empty. */
+        data class Idle(val lastSyncedAt: Long, val note: String = "") : Sync
         data class Working(val step: String) : Sync
         data class Failed(val message: String, val lastSyncedAt: Long) : Sync
     }
@@ -115,10 +116,10 @@ class Account(
         syncJob = scope.launch {
             val last = prefs.getLong(LAST_SYNC, 0)
             syncing.value = try {
-                runSync()
+                val note = runSync()
                 val now = System.currentTimeMillis()
                 prefs.edit().putLong(LAST_SYNC, now).apply()
-                Sync.Idle(now)
+                Sync.Idle(now, note)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: IOException) {
@@ -136,8 +137,10 @@ class Account(
         }
     }
 
-    private suspend fun runSync() {
+    /** Returns a note for the listener when something was held back, otherwise an empty text. */
+    private suspend fun runSync(): String {
         val dao = library.dao
+        var note = ""
 
         // Liked songs, both ways. The likes seen on YouTube last time tell apart "unliked
         // there" (remove here) from "liked here, not sent yet" (send there).
@@ -147,17 +150,27 @@ class Account(
         val now = System.currentTimeMillis()
         // Read from the database, not the in-memory set, which is still empty just after launch.
         val local = dao.allLikes().mapTo(HashSet()) { it.videoId }
-        val plan = planLikeSync(local, remoteIds, readRemoteLikes())
+        val lastRemote = readRemoteLikes()
+        val plan = planLikeSync(local, remoteIds, lastRemote)
         val likeHere = plan.likeHere.toSet()
         val newThere = remote.filter { it.videoId in likeHere }
         dao.insertSongsIfMissing(newThere.map { it.toRow() })
         dao.likeIfMissing(newThere.mapIndexed { i, t -> LikeRow(t.videoId, now - i * 1000L) })
-        plan.unlikeHere.forEach { dao.unlike(it) }
+        // A liked list that came back much shorter than last time is more likely a change on
+        // YouTube's side (or a page that failed to load) than the listener unliking half their
+        // library. Nothing is taken off the phone on that evidence.
+        val heldBack = if (likesLookCutShort(remoteIds.size, lastRemote.size)) plan.unlikeHere else emptyList()
+        if (heldBack.isEmpty()) {
+            plan.unlikeHere.forEach { dao.unlike(it) }
+        } else {
+            note = "YouTube Music listed far fewer liked songs than last time, so no likes were removed from this phone."
+        }
         // Only changes YouTube Music accepted are recorded as being there. One that failed is
         // tried again by the next sync, instead of looking like a song that was unliked there.
         val removedThere = plan.unlikeThere.filter { id -> push { tube.removeLike(id) } }
         val addedThere = plan.likeThere.filter { id -> push { tube.like(id) } }
-        writeRemoteLikes(remoteIds + addedThere - removedThere.toSet())
+        // Held-back songs stay on record as liked there, so the next sync looks at them again.
+        writeRemoteLikes(remoteIds + addedThere + heldBack - removedThere.toSet())
 
         // Playlists: each YouTube Music playlist has a copy here that gains its new songs.
         // Songs added here to such a copy are sent there as they are added (see init), not
@@ -178,6 +191,7 @@ class Account(
         runCatching { tube.subscribedArtists() }.getOrNull()?.let { artists ->
             dao.followIfMissing(artists.map { FollowedArtistRow(it.id, it.name, it.imageUrl, now) })
         }
+        return note
     }
 
     /** Puts a playlist made here into YouTube Music and keeps the two linked. */
@@ -267,3 +281,10 @@ internal fun planLikeSync(local: Set<String>, remote: Set<String>, lastRemote: S
         unlikeThere = onlyThere.filter { it in lastRemote },
     )
 }
+
+/**
+ * True when the liked list from YouTube Music is under half the length it had at the last
+ * sync, for a library big enough that this cannot be a few ordinary unlikes.
+ */
+internal fun likesLookCutShort(remoteNow: Int, remoteLastSync: Int): Boolean =
+    remoteLastSync >= 20 && remoteNow < remoteLastSync / 2

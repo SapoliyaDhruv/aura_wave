@@ -129,13 +129,26 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
         local?.onRepeat?.takeIf { it.size >= 3 }?.let { picks -> item { PickRow("On repeat", picks, player) } }
 
         if (f != null && f.becauseSeed != null && f.because.isNotEmpty()) {
-            item { ShelfHeader("Because you played ${shortTitle(f.becauseSeed.title)}") }
-            pickRows(f.because, graph, player)
+            val title = "Because you played ${shortTitle(f.becauseSeed.title)}"
+            item {
+                PickRow(title, f.because, player, showReason = false) {
+                    actions.openMix(Mix("because", title, "Often played after it", f.because))
+                }
+            }
         }
 
+        // A few as a taste; the whole list, with its reasons and "Not interested", is behind See all.
         if (!f?.freshFinds.isNullOrEmpty()) {
-            item { ShelfHeader("Fresh finds") }
-            pickRows(f!!.freshFinds, graph, player)
+            val fresh = f!!.freshFinds
+            item {
+                ShelfHeader(
+                    "Fresh finds",
+                    onMore = if (fresh.size > FRESH_SHOWN) {
+                        { actions.openMix(Mix("fresh", "Fresh finds", "Songs you have not played yet", fresh)) }
+                    } else null,
+                )
+            }
+            pickRows(fresh.take(FRESH_SHOWN), graph, player)
         }
 
         local?.rediscover?.takeIf { it.size >= 3 }?.let { picks -> item { PickRow("Rediscover", picks, player) } }
@@ -169,13 +182,17 @@ private fun androidx.compose.foundation.lazy.LazyListScope.pickRows(picks: List<
 }
 
 @Composable
-private fun PickRow(title: String, picks: List<Pick>, player: PlayerConnection) {
+private fun PickRow(title: String, picks: List<Pick>, player: PlayerConnection, showReason: Boolean = true, onMore: (() -> Unit)? = null) {
     val tracks = picks.map { it.track }
-    ShelfHeader(title)
+    ShelfHeader(title, onMore)
     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        itemsIndexed(picks, key = { _, p -> p.track.videoId }) { i, pick -> SongTile(pick.track, subtitle = pick.reason) { player.play(tracks, i) } }
+        itemsIndexed(picks, key = { _, p -> p.track.videoId }) { i, pick ->
+            SongTile(pick.track, subtitle = if (showReason) pick.reason else pick.track.artist) { player.play(tracks, i) }
+        }
     }
 }
+
+private const val FRESH_SHOWN = 5
 
 /** The day's main mix, large, with its covers and play buttons. */
 @Composable

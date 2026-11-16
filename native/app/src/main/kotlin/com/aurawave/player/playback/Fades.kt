@@ -5,10 +5,12 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ShuffleOrder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -71,6 +73,39 @@ class FadingPlayer(
 
     override fun setPlayWhenReady(playWhenReady: Boolean) {
         if (playWhenReady) play() else pause()
+    }
+
+    override fun addMediaItem(index: Int, mediaItem: MediaItem) = addMediaItems(index, listOf(mediaItem))
+
+    /**
+     * "Play next" while shuffling. The player would give new songs a random place in its
+     * shuffled order; songs put right after the playing one are meant to play right after it.
+     */
+    override fun addMediaItems(index: Int, mediaItems: List<MediaItem>) {
+        val playNext = exo.shuffleModeEnabled && mediaItems.isNotEmpty() && index == exo.currentMediaItemIndex + 1
+        if (!playNext) {
+            exo.addMediaItems(index, mediaItems)
+            return
+        }
+        val before = shuffledOrder()
+        val current = exo.currentMediaItemIndex
+        exo.addMediaItems(index, mediaItems)
+        // The songs that were at or after the insertion point moved up by the number added.
+        val order = before.mapTo(ArrayList()) { if (it >= index) it + mediaItems.size else it }
+        order.addAll(order.indexOf(current) + 1, (index until index + mediaItems.size).toList())
+        if (order.size == exo.mediaItemCount) exo.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(order.toIntArray(), System.nanoTime()))
+    }
+
+    /** The queue positions in the order shuffle plays them. */
+    private fun shuffledOrder(): List<Int> {
+        val timeline = exo.currentTimeline
+        val order = ArrayList<Int>(timeline.windowCount)
+        var i = timeline.getFirstWindowIndex(true)
+        while (i != C.INDEX_UNSET) {
+            order += i
+            i = timeline.getNextWindowIndex(i, Player.REPEAT_MODE_OFF, true)
+        }
+        return order
     }
 
     override fun seekToNext() = skip { exo.seekToNext() }

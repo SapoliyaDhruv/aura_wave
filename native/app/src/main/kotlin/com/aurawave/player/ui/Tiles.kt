@@ -1,5 +1,8 @@
 package com.aurawave.player.ui
 
+import androidx.compose.ui.layout.ContentScale
+import com.aurawave.innertube.InnerTube
+import coil3.compose.AsyncImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -146,6 +149,38 @@ fun CoverMosaic(covers: List<String>, size: Dp) {
         Row {
             Artwork(distinct[2], half, corner = 0.dp)
             Artwork(distinct[3], half, corner = 0.dp)
+        }
+    }
+}
+
+/**
+ * Up to four covers filling whatever space it is given: a two-by-two quilt when there are
+ * four different ones, otherwise the first cover alone.
+ */
+@Composable
+fun CoverQuilt(covers: List<String>, modifier: Modifier = Modifier) {
+    val distinct = covers.filter { it.isNotEmpty() }.distinct()
+    if (distinct.size < 4) {
+        AsyncImage(
+            model = InnerTube.bigCover(distinct.firstOrNull(), 360),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
+        return
+    }
+    Column(modifier) {
+        for (row in 0..1) {
+            Row(Modifier.weight(1f)) {
+                for (column in 0..1) {
+                    AsyncImage(
+                        model = InnerTube.bigCover(distinct[row * 2 + column], 226),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                    )
+                }
+            }
         }
     }
 }

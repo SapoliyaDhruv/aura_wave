@@ -7,6 +7,13 @@
     <string name="widget_idle_title">AuraWave</string>
     <string name="widget_idle_body">Tap play to pick up where you left off</string>
     <string name="widget_play">Play or pause</string>
+    <string name="widget_idle_short">Tap play to resume</string>
+    <string name="widget_player_label">AuraWave player</string>
+    <string name="widget_cover_label">AuraWave cover</string>
+    <string name="widget_cover_description">The playing song\'s cover, large, with play and pause</string>
+    <string name="widget_recent_label">AuraWave recently played</string>
+    <string name="widget_recent_description">Your last four songs; tap one to play it</string>
+    <string name="widget_recent_empty">Songs you play show up here</string>
     <string name="widget_next">Next song</string>
     <string name="widget_previous">Previous song</string>
 </resources>

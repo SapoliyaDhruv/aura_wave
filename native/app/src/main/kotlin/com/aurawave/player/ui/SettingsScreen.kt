@@ -43,6 +43,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.player.AppGraph
 import com.aurawave.player.data.Backup
+import com.aurawave.player.data.CrashLog
+import com.aurawave.player.data.Release
+import com.aurawave.player.data.Updates
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -207,13 +212,15 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
                 onClick = { library.clearSearches(); actions.say("Recent searches cleared") },
             )
 
+            SettingsGroup("App")
+            UpdateSettings(graph)
+            CrashSetting(graph)
+
             SettingsGroup("About")
-            val version = remember {
-                runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
-            }
             Text(
-                "AuraWave $version\nPlays audio from YouTube Music. Synced lyrics come from LRCLIB. " +
-                    "Streams are found with NewPipeExtractor (GPL-3.0).",
+                "AuraWave ${graph.updates.installed}\nPlays audio from YouTube Music. Synced lyrics come from LRCLIB. " +
+                    "Streams are found with NewPipeExtractor. AuraWave is free software under the GNU General Public " +
+                    "License, version 3: you may share and change it under the same licence.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -249,6 +256,100 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             confirmButton = { TextButton(onClick = graph.backup::dismiss) { Text("Close") } },
         )
         else -> Unit
+    }
+}
+
+/** "Check for updates", the automatic check, and the offer when a newer version is out. */
+@Composable
+private fun UpdateSettings(graph: AppGraph) {
+    val update by graph.updates.state.collectAsStateWithLifecycle()
+    val automatic by graph.settings.autoUpdateCheck.flow.collectAsStateWithLifecycle()
+    var offer by remember { mutableStateOf<Release?>(null) }
+    val available = (update as? Updates.State.Available)?.release
+
+    ActionSetting(
+        title = if (available != null) "Get AuraWave ${available.version}" else "Check for updates",
+        body = when (update) {
+            Updates.State.Idle -> "You have version ${graph.updates.installed}"
+            Updates.State.Checking -> "Checking…"
+            Updates.State.UpToDate -> "Version ${graph.updates.installed} is the latest"
+            is Updates.State.Available -> "A newer version than ${graph.updates.installed} is out"
+            Updates.State.Failed -> "Couldn't check. Try again when you're online."
+        },
+        enabled = update != Updates.State.Checking,
+        onClick = { if (available != null) offer = available else graph.updates.check() },
+    )
+    SwitchSetting(
+        title = "Check for updates automatically",
+        body = "Once a day, when the app opens. It asks GitHub for the latest version and sends nothing about you.",
+        checked = automatic,
+        onChange = { graph.settings.autoUpdateCheck.value = it },
+    )
+    offer?.let { UpdateDialog(graph, it, onDismiss = { offer = null }) }
+}
+
+/** Offers a newer version: what changed, and a button that downloads it. */
+@Composable
+fun UpdateDialog(graph: AppGraph, release: Release, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val actions = LocalSongActions.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.Dusk,
+        title = { Text("AuraWave ${release.version} is available") },
+        text = {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                if (release.notes.isNotEmpty()) {
+                    Text(release.notes, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(12.dp))
+                }
+                Text(
+                    "The download opens in your browser. Open the file when it finishes, and Android installs it over this " +
+                        "version. Your library stays as it is.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (!graph.updates.download(context, release)) actions.say("No browser could open the download.")
+                onDismiss()
+            }) { Text("Download update") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+/** Sends the record of the last crash to whoever looks after the app. */
+@Composable
+private fun CrashSetting(graph: AppGraph) {
+    val context = LocalContext.current
+    val actions = LocalSongActions.current
+    var report by remember { mutableStateOf<CrashLog.Report?>(null) }
+    LaunchedEffect(Unit) { report = withContext(Dispatchers.IO) { graph.crashLog.last() } }
+    val last = report
+    ActionSetting(
+        title = "Share the last crash report",
+        body = if (last == null) {
+            "The app has not crashed"
+        } else {
+            "From ${android.text.format.DateUtils.getRelativeTimeSpanString(last.at)}. It holds the error and your phone model, " +
+                "nothing from your library or account."
+        },
+        enabled = last != null,
+        onClick = { if (last != null && !graph.crashLog.share(context, last)) actions.say("No app could take the report.") },
+    )
+    if (last != null) {
+        ActionSetting(
+            title = "Delete the crash report",
+            body = "",
+            onClick = {
+                graph.crashLog.clear()
+                report = null
+                actions.say("Crash report deleted")
+            },
+        )
     }
 }
 
@@ -340,7 +441,8 @@ private fun AccountSection(graph: AppGraph, onSignIn: () -> Unit) {
         is com.aurawave.player.data.Account.Sync.Working -> "Syncing: ${s.step}…"
         is com.aurawave.player.data.Account.Sync.Failed -> s.message
         is com.aurawave.player.data.Account.Sync.Idle ->
-            if (s.lastSyncedAt == 0L) "Not synced yet" else "Last synced ${android.text.format.DateUtils.getRelativeTimeSpanString(s.lastSyncedAt)}"
+            (if (s.lastSyncedAt == 0L) "Not synced yet" else "Last synced ${android.text.format.DateUtils.getRelativeTimeSpanString(s.lastSyncedAt)}") +
+                if (s.note.isNotEmpty()) "\n${s.note}" else ""
     }
     ActionSetting(
         title = "Sync now",

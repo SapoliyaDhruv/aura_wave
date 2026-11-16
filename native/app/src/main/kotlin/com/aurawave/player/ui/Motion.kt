@@ -37,6 +37,25 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import kotlin.math.sin
 import kotlinx.coroutines.launch
 
 // The app's motion, in one place. Everything here is short, and animates a small part of
@@ -157,3 +176,146 @@ fun LikeButton(liked: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifi
         )
     }
 }
+
+// ---------- the wave ----------
+
+/** Whether music is playing right now; rows use it to animate the song that is on. Provided by AppRoot. */
+val LocalIsPlaying = compositionLocalOf { false }
+
+/**
+ * The seek bar. The part already played is a wave that flows while the music plays and
+ * settles into a straight line when it pauses; the rest is a quiet line. Drag or tap to seek.
+ *
+ * It redraws itself on every frame while playing, and nothing around it: the wave's
+ * movement and the position are read only while drawing.
+ */
+@Composable
+fun WaveSeekBar(
+    positionMs: Long,
+    durationMs: Long,
+    playing: Boolean,
+    color: Color,
+    /** The exact position right now, asked for on each frame so the wave's end glides rather than steps. */
+    livePositionMs: () -> Long,
+    onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val phase = remember { mutableFloatStateOf(0f) }
+    val live = remember { mutableLongStateOf(positionMs) }
+    val height = animateFloatAsState(if (playing) 1f else 0f, tween(500), label = "waveHeight")
+    var dragFraction by remember { mutableStateOf<Float?>(null) }
+    val enabled = durationMs > 0
+    val quiet = Palette.Moon.copy(alpha = 0.22f)
+
+    LaunchedEffect(playing) {
+        if (!playing) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            phase.floatValue = (phase.floatValue + (now - last) / 1e9f * WAVE_TURNS_PER_SECOND * TWO_PI) % TWO_PI
+            live.longValue = livePositionMs()
+            last = now
+        }
+    }
+
+    Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .semantics {
+                contentDescription = "Position in the song"
+                progressBarRangeInfo = ProgressBarRangeInfo(positionMs.toFloat(), 0f..maxOf(durationMs, 1L).toFloat())
+                setProgress { target ->
+                    if (enabled) onSeek(target.toLong().coerceIn(0, durationMs))
+                    enabled
+                }
+            }
+            .pointerInput(enabled, durationMs) {
+                if (!enabled) return@pointerInput
+                detectTapGestures { at -> onSeek(((at.x / size.width).coerceIn(0f, 1f) * durationMs).toLong()) }
+            }
+            .pointerInput(enabled, durationMs) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { at -> dragFraction = (at.x / size.width).coerceIn(0f, 1f) },
+                    onDragEnd = {
+                        dragFraction?.let { onSeek((it * durationMs).toLong()) }
+                        dragFraction = null
+                    },
+                    onDragCancel = { dragFraction = null },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        dragFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                    },
+                )
+            },
+    ) {
+        val inset = THUMB_RADIUS.toPx()
+        val width = size.width - inset * 2
+        val mid = size.height / 2
+        val position = if (playing) live.longValue else positionMs
+        val fraction = dragFraction ?: if (enabled) (position.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        val end = inset + width * fraction
+
+        // What is left to play.
+        drawLine(quiet, Offset(end, mid), Offset(inset + width, mid), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+
+        // What has played: a wave, flattening towards the thumb so the two meet on the line.
+        val amplitude = WAVE_HEIGHT.toPx() * height.value
+        val length = WAVE_LENGTH.toPx()
+        val taper = 14.dp.toPx()
+        val path = Path()
+        path.moveTo(inset, mid)
+        var x = inset
+        while (x < end) {
+            val ease = ((end - x) / taper).coerceIn(0f, 1f) * ((x - inset) / taper).coerceIn(0f, 1f)
+            path.lineTo(x, mid + sin((x / length) * TWO_PI - phase.floatValue) * amplitude * ease)
+            x += 2f
+        }
+        path.lineTo(end, mid)
+        drawPath(path, color, style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+        drawCircle(color, radius = if (dragFraction != null) inset * 1.25f else inset, center = Offset(end, mid))
+    }
+}
+
+private val THUMB_RADIUS = 7.dp
+private val WAVE_HEIGHT = 4.5.dp
+private val WAVE_LENGTH = 30.dp
+private const val WAVE_TURNS_PER_SECOND = 0.9f
+private const val TWO_PI = (2 * Math.PI).toFloat()
+
+/**
+ * Three bars that rise and fall, drawn over the cover of the song that is on. They move
+ * while the music plays and rest when it is paused.
+ */
+@Composable
+fun PlayingBars(moving: Boolean, modifier: Modifier = Modifier, color: Color = Palette.Moon) {
+    val turn = remember { mutableFloatStateOf(0f) }
+    val height = animateFloatAsState(if (moving) 1f else 0f, tween(300), label = "barsHeight")
+    LaunchedEffect(moving) {
+        if (!moving) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            turn.floatValue = (turn.floatValue + (now - last) / 1e9f * 1.4f * TWO_PI) % (TWO_PI * 6)
+            last = now
+        }
+    }
+    Canvas(modifier) {
+        val bar = size.width / 5f
+        for (i in 0 until 3) {
+            // Each bar keeps its own pace, so they never move as one.
+            val swing = (sin(turn.floatValue * BAR_PACE[i] + i * 1.7f) + 1f) / 2f
+            val tall = size.height * (0.28f + 0.72f * swing * height.value)
+            drawRoundRect(
+                color,
+                topLeft = Offset(i * bar * 2f, size.height - tall),
+                size = androidx.compose.ui.geometry.Size(bar, tall),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(bar / 2f),
+            )
+        }
+    }
+}
+
+private val BAR_PACE = floatArrayOf(1f, 1.5f, 0.75f)

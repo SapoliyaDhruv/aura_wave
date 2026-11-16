@@ -247,7 +247,7 @@ class InnerTube(
                 audience = cols.getOrNull(1).orEmpty().replace(ARTIST_PREFIX, ""),
                 imageUrl = bigCover(r.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr.lastOrNull().at("url").str, 400),
             )
-        }.take(limit)
+        }.distinctBy { it.id }.take(limit)
     }
 
     /** Songs, artists and official videos for a free-text (or lyrics) query. */
@@ -325,11 +325,11 @@ class InnerTube(
             imageUrl = thumbs.lastOrNull().at("url").str.orEmpty(),
             audience = runsText(header.at("monthlyListenerCount")),
             songs = (top + credited).uniqueById().take(30),
-            albums = albums?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album },
-            singles = singles?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album },
+            albums = albums?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album }.distinctBy { it.id },
+            singles = singles?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album }.distinctBy { it.id },
             playlists = shelves.filter { it.title.lowercase().let { t -> t.startsWith("playlists") || t == "featured on" } }
                 .flatMap { it.items }.mapNotNull { (it as? BrowseItem.Playlist)?.playlist }.distinctBy { it.id },
-            similar = shelf { it.startsWith("fans might also like") }?.items.orEmpty().mapNotNull { (it as? BrowseItem.Artist)?.artist },
+            similar = shelf { it.startsWith("fans might also like") }?.items.orEmpty().mapNotNull { (it as? BrowseItem.Artist)?.artist }.distinctBy { it.id },
             allAlbums = albums?.takeIf { it.moreBrowseId.isNotEmpty() }?.let { it.moreBrowseId to it.moreParams },
             allSingles = singles?.takeIf { it.moreBrowseId.isNotEmpty() }?.let { it.moreBrowseId to it.moreParams },
         )
@@ -338,14 +338,14 @@ class InnerTube(
     /** Every album (or every single) of an artist: the page behind an artist page's "More" button. */
     suspend fun artistReleases(browseId: String, params: String): List<AlbumRef> {
         val page = call("browse") { put("browseId", browseId); put("params", params) }
-        return page.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Album)?.album }
+        return page.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Album)?.album }.distinctBy { it.id }
     }
 
     // ---------- albums, playlists, explore ----------
 
     suspend fun searchAlbums(query: String): List<AlbumRef> {
         val data = call("search") { put("query", query); put("params", FILTER_ALBUMS) }
-        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Album)?.album }
+        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Album)?.album }.distinctBy { it.id }
     }
 
     /** YouTube Music's own playlists first, then playlists made by people. */
@@ -362,7 +362,7 @@ class InnerTube(
 
     suspend fun searchPodcasts(query: String): List<PodcastRef> {
         val data = call("search") { put("query", query); put("params", FILTER_PODCASTS) }
-        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Podcast)?.podcast }
+        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Podcast)?.podcast }.distinctBy { it.id }
     }
 
     suspend fun album(browseId: String): AlbumPage? {

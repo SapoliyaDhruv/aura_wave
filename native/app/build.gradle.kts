@@ -20,6 +20,8 @@ android {
         targetSdk = 36
         versionCode = 10
         versionName = "3.0.0"
+        // Phones only: every Android phone made in years is 64-bit ARM. Emulators (x86) and old 32-bit phones are left out.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     // The release key lives in native/signing/ (not in git). Without it, release builds are signed

@@ -19,6 +19,9 @@ class Settings(context: Context) {
     /** Keep playing similar songs when the queue runs out. */
     val autoplay = BoolPref("autoplay", true)
 
+    /** Look for a newer version of the app once a day, when it opens. */
+    val autoUpdateCheck = BoolPref("auto_update_check", true)
+
     // ---------- sound ----------
 
     val eqEnabled = BoolPref("eq_enabled", false)

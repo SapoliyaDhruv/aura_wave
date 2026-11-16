@@ -71,13 +71,37 @@
         <receiver
             android:name=".playback.PlayerWidget"
             android:exported="false"
-            android:label="AuraWave">
+            android:label="@string/widget_player_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".playback.CoverWidget"
+            android:exported="false"
+            android:label="@string/widget_cover_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_cover_info" />
+        </receiver>
+
+        <receiver
+            android:name=".playback.RecentWidget"
+            android:exported="false"
+            android:label="@string/widget_recent_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_recent_info" />
         </receiver>
 
         <!-- Play on headphones or in a car while the app is closed resumes the saved queue. -->

@@ -46,7 +46,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,6 +75,7 @@ import com.aurawave.innertube.ArtistRef
 import com.aurawave.innertube.PlaylistRef
 import com.aurawave.innertube.PodcastRef
 import com.aurawave.player.data.Mix
+import com.aurawave.player.data.Release
 import com.aurawave.innertube.Track
 import kotlinx.coroutines.launch
 import com.aurawave.player.AppGraph
@@ -188,7 +191,21 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
             LocalLyrics provides graph.lyrics,
             LocalSongActions provides actions,
             LocalDownloads provides downloads,
+            LocalIsPlaying provides (player.playing && !player.buffering),
         ) {
+            // Once a day, quietly: is there a newer version to offer?
+            var updateOffer by remember { mutableStateOf<Release?>(null) }
+            LaunchedEffect(Unit) {
+                val release = graph.updates.checkIfDue() ?: return@LaunchedEffect
+                val answer = snackbar.showSnackbar(
+                    "AuraWave ${release.version} is available",
+                    actionLabel = "See update",
+                    duration = SnackbarDuration.Long,
+                )
+                if (answer == SnackbarResult.ActionPerformed) updateOffer = release
+            }
+            updateOffer?.let { UpdateDialog(graph, it, onDismiss = { updateOffer = null }) }
+
             LaunchedEffect(player.error) {
                 val message = player.error ?: return@LaunchedEffect
                 player.clearError()

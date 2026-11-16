@@ -99,14 +99,17 @@ class PlayerWidget : AppWidgetProvider() {
     )
 
     companion object {
+        /** What the widgets showed last; the other widgets draw from it too. */
         @Volatile
-        private var last: State? = null
+        internal var last: State? = null
+            private set
 
         /** Redraws every AuraWave widget. Loads the cover, and reads its colours, when the song changed. */
         suspend fun update(context: Context, title: String, artist: String, playing: Boolean, coverUrl: String) {
             val manager = AppWidgetManager.getInstance(context)
-            val ids = manager.getAppWidgetIds(ComponentName(context, PlayerWidget::class.java))
-            if (ids.isEmpty()) return // no widget on the home screen: nothing to do
+            val onScreen = listOf(PlayerWidget::class.java, CoverWidget::class.java, RecentWidget::class.java)
+                .any { manager.getAppWidgetIds(ComponentName(context, it)).isNotEmpty() }
+            if (!onScreen) return // no widget on the home screen: nothing to do
             val previous = last
             val state = if (previous != null && previous.coverUrl == coverUrl) {
                 previous.copy(title = title, artist = artist, playing = playing)
@@ -118,7 +121,22 @@ class PlayerWidget : AppWidgetProvider() {
             }
             last = state
             render(context, state)
+            CoverWidget.render(context, state)
+            RecentWidget.refresh(context)
         }
+
+        /** A song's cover, square with rounded corners, for any of the widgets. */
+        internal suspend fun roundedCover(context: Context, url: String, px: Int): Bitmap? {
+            if (url.isEmpty()) return null
+            val request = ImageRequest.Builder(context).data(InnerTube.bigCover(url, px)).size(px).allowHardware(false).build()
+            val image = (SingletonImageLoader.get(context).execute(request) as? SuccessResult)?.image?.toBitmap() ?: return null
+            return withContext(Dispatchers.Default) { rounded(image) }
+        }
+
+        internal fun openApp(context: Context): PendingIntent =
+            PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+        internal fun playPause(context: Context): PendingIntent = mediaButton(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
 
         private suspend fun loadCover(context: Context, url: String): Bitmap? {
             if (url.isEmpty()) return null

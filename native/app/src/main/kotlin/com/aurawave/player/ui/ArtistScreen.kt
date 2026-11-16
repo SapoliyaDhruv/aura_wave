@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.innertube.AlbumRef
 import com.aurawave.innertube.ArtistRef
+import com.aurawave.innertube.InnerTube
 import com.aurawave.player.AppGraph
 import com.aurawave.player.playback.PlayerConnection
 
@@ -57,7 +58,13 @@ fun ArtistScreen(graph: AppGraph, player: PlayerConnection, artist: ArtistRef, o
             val songs = if (allSongs) page.songs else page.songs.take(TOP_SONGS)
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .coverGlow(InnerTube.bigCover(page.imageUrl, coverPx(104.dp)))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Artwork(page.imageUrl, 104.dp, corner = 52.dp)
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {

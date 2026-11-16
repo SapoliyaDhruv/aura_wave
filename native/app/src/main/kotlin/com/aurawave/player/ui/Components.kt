@@ -115,7 +115,13 @@ fun TrackRow(
             .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Artwork(track.coverUrl, 48.dp)
+        Box(contentAlignment = Alignment.Center) {
+            Artwork(track.coverUrl, 48.dp)
+            if (isCurrent) {
+                Box(Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)).background(Palette.Ink.copy(alpha = 0.55f)))
+                PlayingBars(moving = LocalIsPlaying.current, modifier = Modifier.size(18.dp))
+            }
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(

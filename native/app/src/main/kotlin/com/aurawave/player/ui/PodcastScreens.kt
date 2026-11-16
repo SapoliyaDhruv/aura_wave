@@ -126,6 +126,7 @@ private suspend fun newEpisodes(graph: AppGraph, shows: List<PodcastRef>): List<
     shows.take(MAX_SHOWS).map { show ->
         async { runCatching { graph.catalog.latestEpisodes(show.id) }.getOrDefault(emptyList()).take(3) }
     }.awaitAll().flatten()
+        .distinctBy { it.track.videoId }
         .map { it to episodeTime(it.date, now) }
         .filter { (_, at) -> at == 0L || now - at < 60L * DAY }
         .sortedByDescending { it.second }

@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.innertube.Track
+import com.aurawave.innertube.InnerTube
 import com.aurawave.player.AppGraph
 import com.aurawave.player.playback.PlayerConnection
 
@@ -216,7 +217,12 @@ fun CollectionHeader(
     description: String = "",
     extra: (@Composable () -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .coverGlow(InnerTube.bigCover(coverUrl, coverPx(120.dp)))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Artwork(coverUrl, 120.dp, corner = 10.dp)
             Spacer(Modifier.width(16.dp))

@@ -314,27 +314,17 @@ private fun SeekBar(player: PlayerConnection) {
     val accent = LocalAura.current.accent
     val position = rememberPositionMs(player)
     val duration = player.durationMs
-    var dragging by remember { mutableStateOf<Float?>(null) }
-    val shown = dragging ?: position.toFloat()
 
-    Slider(
-        value = shown.coerceIn(0f, maxOf(duration, 1L).toFloat()),
-        onValueChange = { dragging = it },
-        onValueChangeFinished = {
-            dragging?.let { player.seekTo(it.toLong()) }
-            dragging = null
-        },
-        valueRange = 0f..maxOf(duration, 1L).toFloat(),
-        enabled = duration > 0,
-        colors = SliderDefaults.colors(
-            thumbColor = accent,
-            activeTrackColor = accent,
-            inactiveTrackColor = Palette.Line,
-        ),
-        modifier = Modifier.fillMaxWidth(),
+    WaveSeekBar(
+        positionMs = position,
+        durationMs = duration,
+        playing = player.playing && !player.buffering,
+        color = accent,
+        livePositionMs = { player.positionMs },
+        onSeek = player::seekTo,
     )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(formatTime(shown.toLong()), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(formatTime(position), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(formatTime(duration), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

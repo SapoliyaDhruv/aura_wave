@@ -9,6 +9,8 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.DatabaseProvider
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -85,7 +87,7 @@ class Downloads(
         context,
         database,
         cache,
-        ResolvingDataSource.Factory(OkHttpDataSource.Factory(rangedHttp(http))) { spec ->
+        ResolvingDataSource.Factory(refusalWatching(OkHttpDataSource.Factory(rangedHttp(http)))) { spec ->
             if (spec.uri.scheme != TRACK_SCHEME) spec else spec.withUri(Uri.parse(urlFor(spec.uri.lastPathSegment.orEmpty())))
         },
         Executors.newFixedThreadPool(2),
@@ -211,6 +213,28 @@ class Downloads(
         val limit = settings.downloadLimitMb.value * MB
         if (limit <= 0 || used.value < limit) return
         state.value.values.filter { it.active }.forEach { remove(it.track.videoId) }
+    }
+
+    /**
+     * Stream addresses are tied to the network they were issued on. When YouTube refuses one
+     * (the phone moved from Wi-Fi to mobile data, or it expired), it is forgotten, so the
+     * download's next attempt asks for a new one instead of failing the same way again.
+     */
+    private fun refusalWatching(network: DataSource.Factory) = DataSource.Factory {
+        val upstream = network.createDataSource()
+        object : DataSource by upstream {
+            override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
+
+            override fun open(dataSpec: DataSpec): Long = try {
+                upstream.open(dataSpec)
+            } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                if (e.responseCode == 403 || e.responseCode == 410) {
+                    val refused = dataSpec.uri.toString()
+                    urls.values.removeIf { it.url == refused }
+                }
+                throw e
+            }
+        }
     }
 
     /** Download URLs are looked up at the best quality, separately from what is streaming. */

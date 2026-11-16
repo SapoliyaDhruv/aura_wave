@@ -2,6 +2,8 @@ package com.aurawave.player.data
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class LikeSyncTest {
     @Test
@@ -35,5 +37,14 @@ class LikeSyncTest {
         // Had it been recorded anyway, the next sync would have taken the like off the phone.
         val wronglyRecorded = planLikeSync(local = setOf("a"), remote = emptySet(), lastRemote = setOf("a"))
         assertEquals(listOf("a"), wronglyRecorded.unlikeHere)
+    }
+
+    @Test
+    fun `a liked list that came back much shorter than last time is not trusted`() {
+        assertTrue(likesLookCutShort(remoteNow = 100, remoteLastSync = 480)) // only the first page arrived
+        assertTrue(likesLookCutShort(remoteNow = 0, remoteLastSync = 40))
+        assertFalse(likesLookCutShort(remoteNow = 470, remoteLastSync = 480)) // a few ordinary unlikes
+        assertFalse(likesLookCutShort(remoteNow = 3, remoteLastSync = 12)) // a small library can shrink this much
+        assertFalse(likesLookCutShort(remoteNow = 0, remoteLastSync = 0)) // the first sync
     }
 }
