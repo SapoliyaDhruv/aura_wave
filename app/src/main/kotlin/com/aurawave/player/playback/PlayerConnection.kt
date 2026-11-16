@@ -19,6 +19,7 @@ import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.aurawave.innertube.Track
+import com.aurawave.player.data.PlaySource
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
@@ -128,14 +129,18 @@ class PlayerConnection(private val context: Context) {
 
     // ---------- commands ----------
 
-    /** Replaces the queue with [tracks] and starts at [startIndex]. */
-    fun play(tracks: List<Track>, startIndex: Int = 0) {
+    /** Told about each queue started from a collection, with its songs. Set by the app. */
+    var onCollectionQueued: (PlaySource, List<Track>) -> Unit = { _, _ -> }
+
+    /** Replaces the queue with [tracks] and starts at [startIndex]. [from] names the collection they come from, if any. */
+    fun play(tracks: List<Track>, startIndex: Int = 0, from: PlaySource? = null) {
         val c = controller ?: return
         if (tracks.isEmpty()) return
         error = null
         c.setMediaItems(tracks.map { it.toMediaItem() }, startIndex.coerceIn(0, tracks.lastIndex), 0L)
         c.prepare()
         c.play()
+        if (from != null) onCollectionQueued(from, tracks)
     }
 
     fun playNext(track: Track) {

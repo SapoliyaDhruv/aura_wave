@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.innertube.Track
 import com.aurawave.innertube.InnerTube
 import com.aurawave.player.AppGraph
+import com.aurawave.player.data.PlaySource
 import com.aurawave.player.playback.PlayerConnection
 
 @Composable
@@ -118,7 +119,9 @@ fun PlaylistScreen(graph: AppGraph, player: PlayerConnection, id: Long, onBack: 
         val list = songs
         when {
             p == null || list == null -> Unit // loading, or just deleted
-            else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> {
+                val from = PlaySource.playlist(id, p.name, list.size, list.firstOrNull()?.coverUrl)
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 item(key = "header") {
                     CollectionHeader(
                         title = p.name,
@@ -128,8 +131,8 @@ fun PlaylistScreen(graph: AppGraph, player: PlayerConnection, id: Long, onBack: 
                             if (total > 0) append(" · ").append(formatDuration(total))
                         },
                         coverUrl = list.firstOrNull()?.coverUrl,
-                        onPlay = if (list.isEmpty()) null else ({ player.play(list) }),
-                        onShuffle = if (list.size < 2) null else ({ player.play(list.shuffled()) }),
+                        onPlay = if (list.isEmpty()) null else ({ player.play(list, from = from) }),
+                        onShuffle = if (list.size < 2) null else ({ player.play(list.shuffled(), from = from) }),
                         extra = { DownloadAllButton(list, p.name) },
                     )
                     if (reordering) {
@@ -159,7 +162,7 @@ fun PlaylistScreen(graph: AppGraph, player: PlayerConnection, id: Long, onBack: 
                     TrackRow(
                         track = track,
                         isCurrent = track.videoId == player.current?.mediaId,
-                        onClick = { if (!reordering) player.play(list, i) },
+                        onClick = { if (!reordering) player.play(list, i, from) },
                         onPlayNext = { player.playNext(track) },
                         onAddToQueue = { player.addToQueue(track) },
                         extraActions = listOf("Remove from this playlist" to { library.removeFromPlaylist(id, track.videoId) }),
@@ -176,6 +179,7 @@ fun PlaylistScreen(graph: AppGraph, player: PlayerConnection, id: Long, onBack: 
                         modifier = reorderableItem(reorder, track.videoId),
                     )
                 }
+            }
             }
         }
     }

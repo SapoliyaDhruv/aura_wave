@@ -1,5 +1,6 @@
 package com.aurawave.player.ui
 
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -236,7 +237,7 @@ private fun SearchResult.isEmpty() =
     songs.isEmpty() && videos.isEmpty() && artists.isEmpty() && albums.isEmpty() && playlists.isEmpty() && podcasts.isEmpty()
 
 @Composable
-fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (ArtistRef) -> Unit) {
+fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (ArtistRef) -> Unit, onBack: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val submit = { text: String ->
@@ -255,19 +256,23 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
         state.focusGiven()
     }
 
-    // The keyboard covers the bottom bar; the lists end above it, so the last rows can be reached.
+    // The lists end above the keyboard, so the last rows can be reached while typing.
     Column(Modifier.fillMaxSize().imePadding()) {
-        SearchField(
-            query = state.query,
-            onQueryChange = state::onQueryChange,
-            onClear = {
-                state.clear()
-                runCatching { focusRequester.requestFocus() }
-                keyboard?.show()
-            },
-            onSearch = { submit(state.query) },
-            focusRequester = focusRequester,
-        )
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
+            SearchField(
+                query = state.query,
+                onQueryChange = state::onQueryChange,
+                onClear = {
+                    state.clear()
+                    runCatching { focusRequester.requestFocus() }
+                    keyboard?.show()
+                },
+                onSearch = { submit(state.query) },
+                focusRequester = focusRequester,
+                modifier = Modifier.weight(1f),
+            )
+        }
 
         val result = state.result
         // Typing something new replaces the old results with suggestions for the new text.
@@ -293,7 +298,7 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
         }
         when {
             typingNewQuery && state.suggestions.isNotEmpty() ->
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                     items(state.suggestions.take(SUGGESTIONS_SHOWN)) { s -> SuggestionRow(s) { submit(s) } }
                 }
 
@@ -341,6 +346,7 @@ private fun SearchField(
     onClear: () -> Unit,
     onSearch: () -> Unit,
     focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -351,9 +357,9 @@ private fun SearchField(
     TextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+            .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
             .border(1.5.dp, outline, shape)
             .focusRequester(focusRequester),
         placeholder = { Text("Songs, artists, albums or lyrics", maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -386,7 +392,7 @@ private fun SearchField(
 private fun SearchHome(state: SearchState, onPick: (String) -> Unit) {
     val recent by state.library.recentSearches.collectAsStateWithLifecycle(initialValue = emptyList())
     val actions = LocalSongActions.current
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
         item { ShelfHeader("Browse") }
         item {
             FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -436,7 +442,7 @@ private fun SearchResults(
     onSuggestion: (String) -> Unit = {},
 ) {
     val actions = LocalSongActions.current
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
         items(suggestions, key = { "suggest:$it" }) { s -> SuggestionRow(s) { onSuggestion(s) } }
         if (result.artists.isNotEmpty()) {
             if (filter == SearchFilter.Artists) {

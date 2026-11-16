@@ -96,7 +96,7 @@ fun StatsScreen(graph: AppGraph, player: PlayerConnection, onBack: () -> Unit) {
             )
             return@Column
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
             item {
                 Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                     StatFigure(formatListened(listened), "listened")

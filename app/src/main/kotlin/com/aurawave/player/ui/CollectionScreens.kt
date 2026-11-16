@@ -44,6 +44,7 @@ import com.aurawave.innertube.AlbumRef
 import com.aurawave.innertube.BrowseItem
 import com.aurawave.innertube.PlaylistRef
 import com.aurawave.player.AppGraph
+import com.aurawave.player.data.PlaySource
 import com.aurawave.player.data.Mix
 import com.aurawave.player.data.PlaylistImporter
 import com.aurawave.player.playback.PlayerConnection
@@ -89,14 +90,15 @@ fun AlbumScreen(graph: AppGraph, player: PlayerConnection, ref: AlbumRef, onBack
         }
         LoadContent(loader, "Couldn't open ${ref.title}") { page ->
             val tracks = page.tracks
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            val from = PlaySource.album(page.album, page.album.coverUrl)
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 item {
                     CollectionHeader(
                         title = page.album.title,
                         subtitle = listOf(page.album.type, page.album.year, page.info).filter { it.isNotEmpty() }.joinToString(" · "),
                         coverUrl = page.album.coverUrl,
-                        onPlay = if (tracks.isEmpty()) null else ({ player.play(tracks) }),
-                        onShuffle = if (tracks.size < 2) null else ({ player.play(tracks.shuffled()) }),
+                        onPlay = if (tracks.isEmpty()) null else ({ player.play(tracks, from = from) }),
+                        onShuffle = if (tracks.size < 2) null else ({ player.play(tracks.shuffled(), from = from) }),
                         description = page.description,
                         extra = { DownloadAllButton(tracks, page.album.title) },
                     )
@@ -112,7 +114,7 @@ fun AlbumScreen(graph: AppGraph, player: PlayerConnection, ref: AlbumRef, onBack
                     TrackRow(
                         track = track,
                         isCurrent = track.videoId == player.current?.mediaId,
-                        onClick = { player.play(tracks, i) },
+                        onClick = { player.play(tracks, i, from) },
                         onPlayNext = { player.playNext(track) },
                         onAddToQueue = { player.addToQueue(track) },
                         subtitle = "${i + 1}. ${track.artist}" + if (track.durationSec > 0) " · ${formatTime(track.durationSec * 1000L)}" else "",
@@ -161,14 +163,15 @@ fun OnlinePlaylistScreen(graph: AppGraph, player: PlayerConnection, ref: Playlis
         }
         LoadContent(loader, "Couldn't open ${ref.title}") { page ->
             val tracks = page.tracks
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            val from = PlaySource.online(page.playlist.copy(coverUrl = page.playlist.coverUrl.ifEmpty { ref.coverUrl }), null)
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 item {
                     CollectionHeader(
                         title = page.playlist.title,
                         subtitle = listOf(page.playlist.author, page.info).filter { it.isNotEmpty() }.joinToString(" · "),
                         coverUrl = page.playlist.coverUrl.ifEmpty { ref.coverUrl },
-                        onPlay = if (tracks.isEmpty()) null else ({ player.play(tracks) }),
-                        onShuffle = if (tracks.size < 2) null else ({ player.play(tracks.shuffled()) }),
+                        onPlay = if (tracks.isEmpty()) null else ({ player.play(tracks, from = from) }),
+                        onShuffle = if (tracks.size < 2) null else ({ player.play(tracks.shuffled(), from = from) }),
                         description = page.description,
                         extra = { DownloadAllButton(tracks, page.playlist.title) },
                     )
@@ -177,7 +180,7 @@ fun OnlinePlaylistScreen(graph: AppGraph, player: PlayerConnection, ref: Playlis
                     TrackRow(
                         track = track,
                         isCurrent = track.videoId == player.current?.mediaId,
-                        onClick = { player.play(tracks, i) },
+                        onClick = { player.play(tracks, i, from) },
                         onPlayNext = { player.playNext(track) },
                         onAddToQueue = { player.addToQueue(track) },
                     )
@@ -197,7 +200,7 @@ fun BrowseScreen(graph: AppGraph, player: PlayerConnection, title: String, brows
     Column(Modifier.fillMaxSize()) {
         BackBar(onBack, title)
         LoadContent(loader, "Couldn't open $title") { shelves ->
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 shelves.forEach { shelf ->
                     val moods = shelf.items.filterIsInstance<BrowseItem.Mood>()
                     if (moods.size == shelf.items.size) {
@@ -251,7 +254,7 @@ fun ReleasesScreen(graph: AppGraph, title: String, browseId: String, params: Str
         LoadContent(loader, "Couldn't open $title") { albums ->
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(150.dp),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = listEnd()),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),
@@ -270,7 +273,7 @@ fun MixScreen(graph: AppGraph, player: PlayerConnection, mix: Mix, onBack: () ->
     val tracks = remember(mix) { mix.picks.map { it.track } }
     Column(Modifier.fillMaxSize()) {
         BackBar(onBack)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
             item {
                 CollectionHeader(
                     title = mix.name,

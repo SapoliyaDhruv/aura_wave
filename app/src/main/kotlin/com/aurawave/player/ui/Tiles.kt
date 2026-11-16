@@ -1,5 +1,7 @@
 package com.aurawave.player.ui
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.layout.ContentScale
 import com.aurawave.innertube.InnerTube
 import coil3.compose.AsyncImage
@@ -67,6 +69,10 @@ fun ShelfRow(shelf: Shelf, player: PlayerConnection, onMore: (() -> Unit)? = nul
     }
 }
 
+/** A shelf's heading: clear, but a step below the page's own title and the tabs, as One UI sets them. */
+val ShelfTitle: TextStyle
+    @Composable get() = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+
 @Composable
 fun ShelfHeader(title: String, onMore: (() -> Unit)? = null) {
     if (title.isEmpty() && onMore == null) {
@@ -74,7 +80,7 @@ fun ShelfHeader(title: String, onMore: (() -> Unit)? = null) {
         return
     }
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Text(title, style = ShelfTitle, modifier = Modifier.weight(1f))
         if (onMore != null) TextButton(onClick = onMore) { Text("See all") }
     }
 }
@@ -124,8 +130,8 @@ fun ArtistTile(artist: ArtistSummary, onClick: () -> Unit) =
 
 @Composable
 fun MixTile(mix: Mix, onClick: () -> Unit) {
-    Column(Modifier.width(150.dp).pressable(onClickLabel = "Open ${mix.name}", onClick = onClick)) {
-        CoverMosaic(mix.picks.map { it.track.coverUrl }, 150.dp)
+    Column(Modifier.width(136.dp).pressable(onClickLabel = "Open ${mix.name}", onClick = onClick)) {
+        CoverMosaic(mix.picks.map { it.track.coverUrl }, 136.dp)
         Spacer(Modifier.height(8.dp))
         Text(mix.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(mix.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -149,38 +155,6 @@ fun CoverMosaic(covers: List<String>, size: Dp) {
         Row {
             Artwork(distinct[2], half, corner = 0.dp)
             Artwork(distinct[3], half, corner = 0.dp)
-        }
-    }
-}
-
-/**
- * Up to four covers filling whatever space it is given: a two-by-two quilt when there are
- * four different ones, otherwise the first cover alone.
- */
-@Composable
-fun CoverQuilt(covers: List<String>, modifier: Modifier = Modifier) {
-    val distinct = covers.filter { it.isNotEmpty() }.distinct()
-    if (distinct.size < 4) {
-        AsyncImage(
-            model = InnerTube.bigCover(distinct.firstOrNull(), 360),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = modifier,
-        )
-        return
-    }
-    Column(modifier) {
-        for (row in 0..1) {
-            Row(Modifier.weight(1f)) {
-                for (column in 0..1) {
-                    AsyncImage(
-                        model = InnerTube.bigCover(distinct[row * 2 + column], 226),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
-                }
-            }
         }
     }
 }

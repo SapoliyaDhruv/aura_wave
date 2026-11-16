@@ -106,11 +106,13 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
             Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = listEnd(24.dp))) {
             AccountSection(graph, onSignIn)
 
             SettingsGroup("Look and feel")
             LookSettings(graph)
+
+            FoldedGroup("Tab order") { TabOrderSettings(settings) }
 
             SettingsGroup("Playback")
             SwitchSetting(
@@ -574,7 +576,7 @@ private fun LookSettings(graph: AppGraph) {
     }
     SwitchSetting(
         title = "Swipe on songs",
-        body = "Swipe a song right to play it next, left to like it",
+        body = "Swipe a song right to play it next, left to like it. Swiping sideways on a song then works the song instead of changing tabs.",
         checked = swipe,
         onChange = { settings.swipeSongs.value = it },
     )

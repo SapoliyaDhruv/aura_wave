@@ -28,14 +28,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,15 +70,7 @@ fun PodcastsScreen(graph: AppGraph, player: PlayerConnection) {
         fresh = newEpisodes(graph, following)
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-        item {
-            Text(
-                "Podcasts",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-            )
-        }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
         // The listener's own shows first, then where they left off and what is new: a few of
         // each, with the rest one tap away, so the page does not turn into a long list.
         if (following.isNotEmpty()) {
@@ -178,7 +169,7 @@ fun PodcastScreen(graph: AppGraph, player: PlayerConnection, ref: PodcastRef, on
         LoadContent(loader, "Couldn't open ${ref.title}") { page ->
             val show = page.podcast.copy(coverUrl = page.podcast.coverUrl.ifEmpty { ref.coverUrl })
             val isFollowing = show.id in following
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 item {
                     CollectionHeader(
                         title = show.title,

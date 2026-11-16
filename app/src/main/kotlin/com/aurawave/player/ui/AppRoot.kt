@@ -1,11 +1,29 @@
 package com.aurawave.player.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalConfiguration
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
@@ -18,9 +36,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -40,17 +56,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.Podcasts
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -58,20 +67,19 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -86,13 +94,6 @@ import kotlinx.coroutines.launch
 import com.aurawave.player.AppGraph
 import com.aurawave.player.playback.PlayerConnection
 
-private enum class Tab(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Rounded.Home),
-    Search("Search", Icons.Rounded.Search),
-    Library("Library", Icons.Rounded.LibraryMusic),
-    Podcasts("Podcasts", Icons.Rounded.Podcasts),
-}
-
 /** Pages opened on top of a tab. Back closes the newest one. */
 private sealed interface Screen {
     data class Artist(val ref: ArtistRef) : Screen
@@ -104,6 +105,8 @@ private sealed interface Screen {
     data class MixPage(val mix: Mix) : Screen
     data class Podcast(val ref: PodcastRef) : Screen
     data object Settings : Screen
+    data object Search : Screen
+    data object History : Screen
     data object Login : Screen
     data object Stats : Screen
 }
@@ -131,15 +134,19 @@ private class PageStack {
     fun closeAll(): List<Page> = pages.toList().also { pages.clear() }
 }
 
-/** What fills the area above the bottom bar: a tab, or the newest page opened on top of it. */
-private data class Shown(val key: String, val screen: Screen?, val tab: Tab, val depth: Int)
+/** What fills the screen above the mini player: the tabs, or the newest page opened on top of them. */
+private data class Shown(val key: String, val screen: Screen?, val depth: Int)
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     val likedIds by graph.library.likedIds.collectAsStateWithLifecycle()
     val downloads by graph.downloads.songs.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(Tab.Home) }
+    val tabOrder by graph.settings.tabOrder.flow.collectAsStateWithLifecycle()
+    val tabs = remember(tabOrder) { Tab.ordered(tabOrder) }
+    val openTabName by graph.settings.openTab.flow.collectAsStateWithLifecycle()
+    val homeIndex = tabs.indexOf(Tab.named(openTabName) ?: Tab.Home).coerceAtLeast(0)
+    val pager = rememberPagerState(initialPage = homeIndex) { tabs.size }
     val stack = remember { PageStack() }
     var nowPlayingOpen by rememberSaveable { mutableStateOf(false) }
     var addingToPlaylist by remember { mutableStateOf<List<Track>?>(null) }
@@ -184,11 +191,23 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     // another page is on top of it, so Back returns to where the listener was.
     val pages = rememberSaveableStateHolder()
     val closePage: () -> Unit = { stack.close()?.let { pages.removeState(it.key) } }
-    val openTab: (Tab) -> Unit = { t ->
-        // Search pressed while Search is already showing: straight to typing.
-        if (t == Tab.Search && tab == Tab.Search && stack.isEmpty) search.askForFocus()
+    val openSearch: () -> Unit = {
+        if (stack.top?.screen != Screen.Search) stack.open(Screen.Search)
+        search.askForFocus()
+    }
+    val showTab: (Tab) -> Unit = { t ->
         stack.closeAll().forEach { pages.removeState(it.key) }
-        tab = t
+        tabs.indexOf(t).takeIf { it >= 0 }?.let { scope.launch { pager.animateScrollToPage(it) } }
+    }
+    // A new order in Settings: go back to the tab the app opens on.
+    LaunchedEffect(tabs, homeIndex) { if (pager.currentPage != homeIndex) pager.scrollToPage(homeIndex) }
+
+    // Remember the collection a queue was started from, so Home can offer to carry on with it.
+    LaunchedEffect(player) {
+        player.onCollectionQueued = { from, tracks ->
+            graph.settings.lastPlayed.value = from.encode()
+            graph.settings.lastPlayedIds.value = tracks.map { it.videoId }
+        }
     }
 
     val accent by graph.settings.themeAccent.flow.collectAsStateWithLifecycle()
@@ -222,11 +241,26 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                 snackbar.showSnackbar(message)
             }
 
-            BackHandler(enabled = nowPlayingOpen || !stack.isEmpty || tab != Tab.Home) {
+            // The player rises over the app as one seekable transition, so a swipe on the mini
+            // player can carry it with the finger, and a tap or Back plays the same motion.
+            val sheet = remember { SeekableTransitionState(nowPlayingOpen) }
+            val sheetTransition = rememberTransition(sheet, label = "player")
+            val pull = remember { PlayerPull(sheet, scope) }
+            LaunchedEffect(nowPlayingOpen) {
+                // A swipe's sink-back still running would otherwise take the transition back from this.
+                pull.cancel()
+                if (sheet.currentState != nowPlayingOpen || sheet.targetState != nowPlayingOpen) sheet.animateTo(nowPlayingOpen, PlayerSettle)
+            }
+            LaunchedEffect(player.current == null) {
+                if (player.current == null) nowPlayingOpen = false
+            }
+
+            // Back closes the player, then the newest page, then returns to the tab the app opens on.
+            BackHandler(enabled = nowPlayingOpen || !stack.isEmpty || pager.currentPage != homeIndex) {
                 when {
                     nowPlayingOpen -> nowPlayingOpen = false
                     !stack.isEmpty -> closePage()
-                    else -> tab = Tab.Home
+                    else -> scope.launch { pager.animateScrollToPage(homeIndex) }
                 }
             }
 
@@ -238,56 +272,56 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                     snackbarHost = { SnackbarHost(snackbar) },
                     bottomBar = {
                         Column {
+                            // The slot appears and goes with the music. While the player is open it
+                            // keeps its height under the player and only its contents fade, so the
+                            // page behind is never re-laid out during the motion.
                             AnimatedVisibility(
-                                visible = player.current != null && !nowPlayingOpen,
+                                visible = player.current != null,
                                 enter = fadeIn(tween(200)) + expandVertically(tween(220)),
                                 exit = fadeOut(tween(160)) + shrinkVertically(tween(220)),
                             ) {
-                                CompositionLocalProvider(LocalSharedScope provides sharedScope, LocalVisibilityScope provides this) {
-                                    MiniPlayer(
-                                        player,
-                                        onOpen = { nowPlayingOpen = true },
-                                        onStop = {
-                                            val stopped = player.stopAll()
-                                            scope.launch {
-                                                snackbar.currentSnackbarData?.dismiss()
-                                                val answer = snackbar.showSnackbar("Playback stopped", actionLabel = "Undo", duration = SnackbarDuration.Short)
-                                                if (answer == SnackbarResult.ActionPerformed && stopped != null) player.restore(stopped)
-                                            }
-                                        },
-                                    )
-                                }
-                            }
-                            NavigationBar(containerColor = Palette.Dusk) {
-                                Tab.entries.forEach { t ->
-                                    NavigationBarItem(
-                                        selected = tab == t && stack.isEmpty,
-                                        onClick = { openTab(t) },
-                                        icon = { Icon(t.icon, contentDescription = null) },
-                                        label = { Text(t.label) },
-                                        colors = NavigationBarItemDefaults.colors(
-                                            selectedIconColor = Palette.OnAura,
-                                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                                            indicatorColor = MaterialTheme.colorScheme.primary,
-                                            unselectedIconColor = Palette.Haze,
-                                            unselectedTextColor = Palette.Haze,
-                                        ),
-                                    )
+                                Box(Modifier.fillMaxWidth().height(MINI_SLOT + navigationBarHeight())) {
+                                    sheetTransition.AnimatedVisibility(
+                                        visible = { open -> !open },
+                                        enter = fadeIn(tween(160, easing = LinearEasing)),
+                                        exit = fadeOut(tween(160, easing = LinearEasing)),
+                                    ) {
+                                        CompositionLocalProvider(LocalSharedScope provides sharedScope, LocalVisibilityScope provides this) {
+                                            MiniPlayer(
+                                                player,
+                                                onOpen = { nowPlayingOpen = true },
+                                                onStop = {
+                                                    val stopped = player.stopAll()
+                                                    scope.launch {
+                                                        snackbar.currentSnackbarData?.dismiss()
+                                                        val answer = snackbar.showSnackbar("Playback stopped", actionLabel = "Undo", duration = SnackbarDuration.Short)
+                                                        if (answer == SnackbarResult.ActionPerformed && stopped != null) player.restore(stopped)
+                                                    }
+                                                },
+                                                onPull = pull::follow,
+                                                onPullEnd = { open, from -> pull.release(open, from, onOpen = { nowPlayingOpen = true }) },
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     },
                 ) { padding ->
-                    Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
+                    // The pages run down behind the mini player, which floats over them; each list
+                    // ends with room for it (LocalListEnd), so its last row can be scrolled clear.
+                    Box(Modifier.padding(top = padding.calculateTopPadding()).consumeWindowInsets(padding).fillMaxSize()) {
                         val top = stack.top
+                        val listSpace = padding.calculateBottomPadding()
                         AnimatedContent(
-                            targetState = Shown(top?.key ?: "tab:${tab.name}", top?.screen, tab, stack.pages.size),
+                            targetState = Shown(top?.key ?: "tabs", top?.screen, stack.pages.size),
                             modifier = Modifier.fillMaxSize(),
                             transitionSpec = { pageTransition(initialState.depth, targetState.depth) },
                             contentKey = { it.key },
                             label = "page",
                         ) { page ->
                             pages.SaveableStateProvider(page.key) {
+                                CompositionLocalProvider(LocalListEnd provides listSpace) {
                                 when (val screen = page.screen) {
                                     is Screen.Artist -> ArtistScreen(graph, player, screen.ref, onBack = closePage)
                                     is Screen.Playlist -> PlaylistScreen(graph, player, screen.id, onBack = closePage)
@@ -300,28 +334,44 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                     Screen.Settings -> SettingsScreen(graph, onBack = closePage, onSignIn = { stack.open(Screen.Login) })
                                     Screen.Login -> LoginScreen(graph, onBack = closePage)
                                     Screen.Stats -> StatsScreen(graph, player, onBack = closePage)
-                                    null -> when (page.tab) {
-                                        Tab.Home -> HomeScreen(graph, player, onOpenSearch = { tab = Tab.Search; search.askForFocus() })
-                                        Tab.Search -> SearchScreen(search, player, onOpenArtist = actions.openArtist)
-                                        Tab.Podcasts -> PodcastsScreen(graph, player)
-                                        Tab.Library -> LibraryScreen(
-                                            graph,
-                                            player,
-                                            onOpenPlaylist = actions.openPlaylist,
-                                            onOpenSettings = { stack.open(Screen.Settings) },
-                                            onOpenStats = { stack.open(Screen.Stats) },
-                                        )
+                                    Screen.Search -> SearchScreen(search, player, onOpenArtist = actions.openArtist, onBack = closePage)
+                                    Screen.History -> HistoryScreen(graph, player, onBack = closePage)
+                                    null -> TabsHome(
+                                        tabs = tabs,
+                                        pager = pager,
+                                        onSearch = openSearch,
+                                        onHistory = { stack.open(Screen.History) },
+                                        onStats = { stack.open(Screen.Stats) },
+                                        onSettings = { stack.open(Screen.Settings) },
+                                    ) { tab ->
+                                        when (tab) {
+                                            Tab.Home -> HomeScreen(
+                                                graph,
+                                                player,
+                                                onOpenSearch = openSearch,
+                                                onOpenLiked = { showTab(Tab.Liked) },
+                                                onOpenHistory = { stack.open(Screen.History) },
+                                            )
+                                            Tab.Discover -> DiscoverScreen(graph, player, onOpenSearch = openSearch)
+                                            Tab.Liked -> LikedTab(graph, player)
+                                            Tab.Playlists -> PlaylistsTab(graph, player, onOpenPlaylist = actions.openPlaylist)
+                                            Tab.Podcasts -> PodcastsScreen(graph, player)
+                                            Tab.Albums -> AlbumsTab(graph)
+                                            Tab.Artists -> ArtistsTab(graph)
+                                            Tab.Downloads -> DownloadsTab(graph, player)
+                                        }
                                     }
+                                }
                                 }
                             }
                         }
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = nowPlayingOpen && player.current != null,
-                    enter = slideInVertically(tween(320)) { it / 5 } + fadeIn(tween(220)),
-                    exit = slideOutVertically(tween(260)) { it / 5 } + fadeOut(tween(200)),
+                sheetTransition.AnimatedVisibility(
+                    visible = { open -> open },
+                    enter = PlayerEnter,
+                    exit = PlayerExit,
                 ) {
                     CompositionLocalProvider(LocalSharedScope provides sharedScope, LocalVisibilityScope provides this) {
                         NowPlayingScreen(graph, player, onClose = { nowPlayingOpen = false })
@@ -336,31 +386,103 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     }
 }
 
+
 /**
- * The playing song, above the tabs. Tap it or swipe it up to open the player; swipe it down
- * to stop the music and put it away; swipe left for the next song and right for the
- * previous one. Its lower edge is the song's progress, as a small wave.
+ * A swipe up on the mini player, carried through to the player: while the finger moves, the
+ * player rises with it; when it lets go, the player either finishes opening or sinks back
+ * from wherever the finger left it.
+ */
+private class PlayerPull(private val sheet: SeekableTransitionState<Boolean>, private val scope: CoroutineScope) {
+    private var job: Job? = null
+
+    /** [fraction] is how far the player has risen, 0 (closed) to 1 (open). */
+    fun follow(fraction: Float) {
+        job?.cancel()
+        job = scope.launch { sheet.seekTo(fraction.coerceIn(0f, 1f), targetState = true) }
+    }
+
+    /** Stops a swipe's motion, so a tap or Back can take over the transition. */
+    fun cancel() {
+        job?.cancel()
+        job = null
+    }
+
+    fun release(open: Boolean, from: Float, onOpen: () -> Unit) {
+        job?.cancel()
+        if (open) {
+            onOpen() // AppRoot finishes the opening from where the finger left it
+            return
+        }
+        job = scope.launch {
+            val back = Animatable(from.coerceIn(0f, 1f))
+            val seeking = launch { snapshotFlow { back.value }.collect { sheet.seekTo(it, targetState = true) } }
+            back.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
+            seeking.cancel()
+            sheet.snapTo(false)
+        }
+    }
+}
+
+/** How the player settles once it is let go, or opened with a tap: quick at first, gentle at the end. */
+private val PlayerSettle = tween<Float>(380, easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f))
+
+/**
+ * The player's own motion, in step with the finger: it travels the screen's full height at
+ * an even pace, so a swipe of a given length lifts it by the same length. The ease comes
+ * from [PlayerSettle], which drives this transition when nobody is touching it.
+ */
+private const val PLAYER_TRAVEL_MS = 360
+private val PlayerEnter = slideInVertically(tween(PLAYER_TRAVEL_MS, easing = LinearEasing)) { it } +
+    fadeIn(tween(140, easing = LinearEasing))
+private val PlayerExit = slideOutVertically(tween(PLAYER_TRAVEL_MS, easing = LinearEasing)) { it } +
+    fadeOut(tween(140, delayMillis = PLAYER_TRAVEL_MS - 140, easing = LinearEasing))
+
+/** The mini player's slot above the tabs. Fixed, so the page underneath never shifts while the player opens or closes. */
+private val MINI_HEIGHT = 60.dp
+private val MINI_TOP_GAP = 6.dp
+private val MINI_SLOT = MINI_HEIGHT + MINI_TOP_GAP
+/** The mini player's corners; with its 60 dp height, nearly a pill, and close to the screen's own corners at the bottom. */
+private val MINI_CORNER = 28.dp
+/** The gap around the cover inside the mini player, so the cover's corners run parallel to the bar's. */
+private val MINI_INSET = 8.dp
+
+/**
+ * The playing song, above the tabs. Tap it or swipe it up to open the player, which rises
+ * with the finger; swipe it down to stop the music and put it away; swipe left for the next
+ * song and right for the previous one. No progress here: the player shows it.
  */
 @Composable
-private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit, onStop: () -> Unit) {
+private fun MiniPlayer(
+    player: PlayerConnection,
+    onOpen: () -> Unit,
+    onStop: () -> Unit,
+    /** How far a swipe up has lifted the player, 0 to 1. */
+    onPull: (Float) -> Unit,
+    /** The swipe up has ended: open the player, or let it sink back from [from]. */
+    onPullEnd: (open: Boolean, from: Float) -> Unit,
+) {
     val item = player.current ?: return
     val meta = item.mediaMetadata
-    val position = rememberPositionMs(player)
     val aura = LocalAura.current
     val offset = remember { Animatable(0f) }
     val lift = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val threshold = with(density) { 96.dp.toPx() }
-    val openAt = with(density) { 14.dp.toPx() }
-    val maxLift = with(density) { 28.dp.toPx() }
     val stopAt = with(density) { 30.dp.toPx() }
     val maxDrop = with(density) { 56.dp.toPx() }
-    val shape = RoundedCornerShape(18.dp)
-    Column(
+    val flingSpeed = with(density) { 700.dp.toPx() }
+    val screenHeight = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    // A soft pill, its ends following the same curve as the cover inside it, as One UI draws it.
+    val shape = RoundedCornerShape(MINI_CORNER)
+    // It runs down to the screen's edge. Where the phone shows a navigation bar, the pill
+    // reaches under it and keeps its own buttons above it.
+    val underBar = navigationBarHeight()
+    Box(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(start = 4.dp, end = 4.dp, top = MINI_TOP_GAP)
+            .height(MINI_HEIGHT + underBar)
             .graphicsLayer {
                 translationX = offset.value
                 translationY = lift.value
@@ -387,33 +509,55 @@ private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit, onStop: () 
                     },
                 )
             }
-            .pointerInput(Unit) {
-                // Up, it rises a little with the finger and the player takes over. Down, it sinks
-                // behind the tabs and the music stops.
+            .pointerInput(screenHeight) {
+                // Up, the player comes up under the finger. Down, the mini player sinks behind
+                // the tabs and the music stops.
+                val tracker = VelocityTracker()
+                var travelled = 0f
+                var pulled = false
+                fun lifted() = (-travelled / screenHeight).coerceIn(0f, 1f)
                 detectVerticalDragGestures(
-                    onDragEnd = {
-                        when {
-                            lift.value <= -openAt -> onOpen()
-                            lift.value >= stopAt -> onStop()
-                        }
-                        scope.launch { lift.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow)) }
+                    onDragStart = {
+                        tracker.resetTracking()
+                        travelled = 0f
+                        pulled = false
                     },
-                    onDragCancel = { scope.launch { lift.animateTo(0f) } },
+                    onDragEnd = {
+                        val speed = tracker.calculateVelocity().y
+                        if (pulled) {
+                            val open = speed < -flingSpeed || (lifted() > 0.18f && speed < flingSpeed)
+                            onPullEnd(open, lifted())
+                        }
+                        if (lift.value >= stopAt) onStop()
+                        scope.launch { lift.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)) }
+                    },
+                    onDragCancel = {
+                        if (pulled) onPullEnd(false, lifted())
+                        scope.launch { lift.animateTo(0f) }
+                    },
                     onVerticalDrag = { change, amount ->
                         change.consume()
-                        scope.launch { lift.snapTo((lift.value + amount * 0.5f).coerceIn(-maxLift, maxDrop)) }
+                        travelled += amount
+                        tracker.addPosition(change.uptimeMillis, Offset(0f, travelled))
+                        if (travelled < 0f) {
+                            pulled = true
+                            onPull(lifted())
+                            scope.launch { lift.snapTo(0f) }
+                        } else {
+                            if (pulled) onPull(0f)
+                            scope.launch { lift.snapTo((travelled * 0.5f).coerceAtMost(maxDrop)) }
+                        }
                     },
                 )
             }
+            .shadow(10.dp, shape, ambientColor = Color.Black, spotColor = Color.Black)
             .clip(shape)
-            // The song's colour comes in from the cover's side and fades into the bar.
-            .background(Palette.Raised)
-            .background(Brush.horizontalGradient(listOf(aura.deep.copy(alpha = 0.85f), aura.deep.copy(alpha = 0.25f))))
-            .border(1.dp, Palette.Line, shape)
+            // One calm colour taken from the cover, with no outline.
+            .background(lerp(Palette.Raised, aura.deep, 0.8f))
             .clickable(onClickLabel = "Open player", onClick = onOpen),
     ) {
-        Row(Modifier.padding(start = 10.dp, top = 10.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(meta.artworkUri?.toString(), MINI_COVER, Modifier.playerCover())
+        Row(Modifier.fillMaxSize().padding(start = MINI_INSET, end = 4.dp, bottom = underBar), verticalAlignment = Alignment.CenterVertically) {
+            Artwork(meta.artworkUri?.toString(), MINI_COVER, Modifier.playerCover(), corner = MINI_CORNER - MINI_INSET)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -438,13 +582,8 @@ private fun MiniPlayer(player: PlayerConnection, onOpen: () -> Unit, onStop: () 
                 Icon(Icons.Rounded.SkipNext, contentDescription = "Next song")
             }
         }
-        WaveProgress(
-            positionMs = position,
-            durationMs = player.durationMs,
-            playing = player.playing && !player.buffering,
-            color = aura.accent,
-            livePositionMs = { player.positionMs },
-            modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 4.dp),
-        )
     }
 }
+
+@Composable
+private fun navigationBarHeight() = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()

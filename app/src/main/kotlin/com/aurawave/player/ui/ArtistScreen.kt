@@ -56,7 +56,7 @@ fun ArtistScreen(graph: AppGraph, player: PlayerConnection, artist: ArtistRef, o
             val isFollowing = page.id in following
             val currentId = player.current?.mediaId
             val songs = if (allSongs) page.songs else page.songs.take(TOP_SONGS)
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
                 item {
                     Row(
                         Modifier

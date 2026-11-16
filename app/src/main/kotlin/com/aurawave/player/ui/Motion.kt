@@ -33,11 +33,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeJoin
@@ -50,11 +54,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -185,17 +187,18 @@ fun LikeButton(liked: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifi
     }
 }
 
-// ---------- the wave ----------
+// ---------- the seek bar ----------
 
 /** Whether music is playing right now; rows use it to animate the song that is on. Provided by AppRoot. */
 val LocalIsPlaying = compositionLocalOf { false }
 
 /**
- * The seek bar, in the manner of One UI's media player: the part already played is one
- * clean wave that rolls slowly while the music plays and rests, lower and still, when it
- * pauses; the rest is a quiet straight line. Drag or tap to seek.
+ * The seek bar: a thick, rounded track. The part already played carries water on its top
+ * edge, three soft layers of waves drifting at their own pace; the bottom edge stays
+ * straight. Paused, the water settles lower and stills. A slim upright thumb sits between
+ * the played part and the rest, with a small gap on each side. Drag or tap to seek.
  *
- * It redraws itself on every frame while playing, and nothing around it: the wave's
+ * It redraws itself on every frame while playing, and nothing around it: the water's
  * movement and the position are read only while drawing.
  */
 @Composable
@@ -204,7 +207,7 @@ fun WaveSeekBar(
     durationMs: Long,
     playing: Boolean,
     color: Color,
-    /** The exact position right now, asked for on each frame so the wave's end glides rather than steps. */
+    /** The exact position right now, asked for on each frame so the played part's end glides rather than steps. */
     livePositionMs: () -> Long,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -212,15 +215,15 @@ fun WaveSeekBar(
     val flow = rememberWaveFlow(playing, livePositionMs, positionMs)
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     val dragging = dragFraction != null
-    val thumb = animateFloatAsState(if (dragging) 1.4f else 1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium), label = "thumb")
+    val thumb = animateFloatAsState(if (dragging) 1.3f else 1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium), label = "thumb")
     val enabled = durationMs > 0
-    val quiet = Palette.Moon.copy(alpha = 0.22f)
+    val quiet = Palette.Moon.copy(alpha = 0.16f)
     val path = remember { Path() }
 
     Canvas(
         modifier
             .fillMaxWidth()
-            .height(36.dp)
+            .height(40.dp)
             .semantics {
                 contentDescription = "Position in the song"
                 progressBarRangeInfo = ProgressBarRangeInfo(positionMs.toFloat(), 0f..maxOf(durationMs, 1L).toFloat())
@@ -249,108 +252,131 @@ fun WaveSeekBar(
                 )
             },
     ) {
-        val inset = THUMB_RADIUS.toPx() * 1.4f
+        val track = TRACK.toPx()
+        val thumbWidth = THUMB_WIDTH.toPx()
+        val inset = track / 2 + thumbWidth
         val width = size.width - inset * 2
-        val mid = size.height / 2
+        // The track sits a little low, so the water has room above it.
+        val mid = size.height / 2 + 4.dp.toPx()
         val position = if (playing) flow.live.longValue else positionMs
         val fraction = dragFraction ?: if (enabled) (position.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-        val end = inset + width * fraction
-        val stroke = 4.dp.toPx()
+        val at = inset + width * fraction
+        val clear = GAP.toPx() + thumbWidth / 2 + track / 2
+        val playedEnd = at - clear
+        val restStart = at + clear
 
         // What is left to play.
-        drawLine(quiet, Offset(end, mid), Offset(inset + width, mid), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawWave(path, inset, end, mid, flow.phase.floatValue, 3.5.dp.toPx() * flow.height.value, 30.dp.toPx(), stroke, color)
-        drawCircle(color, radius = THUMB_RADIUS.toPx() * thumb.value, center = Offset(end, mid))
+        if (restStart < inset + width) {
+            drawLine(quiet, Offset(restStart, mid), Offset(inset + width, mid), strokeWidth = track, cap = StrokeCap.Round)
+        }
+        // What has been played: the water behind, then the bar, then the front ripple on top of it.
+        if (playedEnd > inset) {
+            val top = mid - track / 2
+            val time = flow.time.floatValue
+            val height = flow.height.value
+            WATER.forEachIndexed { i, layer ->
+                if (i == WATER.lastIndex) {
+                    drawLine(color, Offset(inset, mid), Offset(playedEnd, mid), strokeWidth = track, cap = StrokeCap.Round)
+                }
+                drawWater(path, inset, playedEnd, top, mid, time, height, layer, color)
+            }
+        }
+        val thumbHeight = THUMB_HEIGHT.toPx() * thumb.value
+        drawRoundRect(
+            color,
+            topLeft = Offset(at - thumbWidth / 2, mid - thumbHeight / 2),
+            size = Size(thumbWidth, thumbHeight),
+            cornerRadius = CornerRadius(thumbWidth / 2),
+        )
     }
 }
 
-/**
- * The same wave, small, for the mini player: no thumb, nothing to touch, just the song's
- * progress along the lower edge.
- */
-@Composable
-fun WaveProgress(
-    positionMs: Long,
-    durationMs: Long,
-    playing: Boolean,
-    color: Color,
-    livePositionMs: () -> Long,
-    modifier: Modifier = Modifier,
-) {
-    val flow = rememberWaveFlow(playing, livePositionMs, positionMs)
-    val quiet = Palette.Moon.copy(alpha = 0.14f)
-    val path = remember { Path() }
-    Canvas(modifier.fillMaxWidth().height(10.dp)) {
-        val edge = 2.dp.toPx()
-        val mid = size.height / 2
-        val position = if (playing) flow.live.longValue else positionMs
-        val fraction = if (durationMs > 0) (position.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-        val end = edge + (size.width - edge * 2) * fraction
-        val stroke = 2.5.dp.toPx()
-        drawLine(quiet, Offset(end, mid), Offset(size.width - edge, mid), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawWave(path, edge, end, mid, flow.phase.floatValue, 2.dp.toPx() * flow.height.value, 20.dp.toPx(), stroke, color)
-    }
-}
-
-/** What moves a wave: how far it has rolled, how tall it stands, and where the song is on this frame. */
-private class WaveFlow(val phase: MutableFloatState, val live: MutableLongState, val height: State<Float>)
+/** What moves the water: how long it has flowed, how high it stands, and where the song is on this frame. */
+private class WaveFlow(val time: MutableFloatState, val live: MutableLongState, val height: State<Float>)
 
 @Composable
 private fun rememberWaveFlow(playing: Boolean, livePositionMs: () -> Long, positionMs: Long): WaveFlow {
-    val phase = remember { mutableFloatStateOf(0f) }
+    val time = remember { mutableFloatStateOf(0f) }
     val live = remember { mutableLongStateOf(positionMs) }
-    // Paused, the wave stays a wave, only lower and still: a flat line reads as nothing playing at all.
-    val height = animateFloatAsState(if (playing) 1f else WAVE_AT_REST, spring(dampingRatio = 0.8f, stiffness = 90f), label = "waveHeight")
+    // Paused, the water stays, only lower and still: a flat line reads as nothing playing at all.
+    val height = animateFloatAsState(if (playing) 1f else WAVE_AT_REST, spring(dampingRatio = 0.9f, stiffness = 60f), label = "waveHeight")
     val position = rememberUpdatedState(livePositionMs)
     LaunchedEffect(playing) {
         if (!playing) return@LaunchedEffect
         var last = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
-            phase.floatValue = (phase.floatValue + (now - last) / 1e9f * WAVE_TURNS_PER_SECOND * TWO_PI) % TWO_PI
+            // Every layer turns a whole number of times in WATER_CYCLE seconds, so wrapping the clock leaves no seam.
+            time.floatValue = (time.floatValue + (now - last) / 1e9f) % WATER_CYCLE
             live.longValue = position.value()
             last = now
         }
     }
-    return remember { WaveFlow(phase, live, height) }
+    return remember { WaveFlow(time, live, height) }
 }
 
+/** One layer of water: how high its crests rise, how far apart they are, how fast they drift, and how see-through it is. */
+private class WaterLayer(val rise: Dp, val length: Dp, val turnsPerSecond: Float, val alpha: Float, val offset: Float)
+
+// Back to front. The back layers are taller, slower and fainter; the front one is a low ripple in full colour.
+private val WATER = listOf(
+    WaterLayer(rise = 7.dp, length = 58.dp, turnsPerSecond = 0.25f, alpha = 0.16f, offset = 0f),
+    WaterLayer(rise = 5.dp, length = 40.dp, turnsPerSecond = 0.40f, alpha = 0.32f, offset = 2.1f),
+    WaterLayer(rise = 2.5.dp, length = 28.dp, turnsPerSecond = 0.55f, alpha = 1f, offset = 4.2f),
+)
+private const val WATER_CYCLE = 20f
+
 /**
- * Draws one even sine from [start] to [end] along [mid], rolling towards the end. It
- * eases onto the line over its last half wavelength, so it meets the thumb (or the quiet
- * line) without a step.
+ * Fills one layer from the bar's centre line up to its wavy top, between [start] and
+ * [end]. The waves only ever rise above [top], so the bar's lower edge stays straight,
+ * and they calm to nothing at both ends so the water meets the bar's round caps.
  */
-private fun DrawScope.drawWave(
+private fun DrawScope.drawWater(
     path: Path,
     start: Float,
     end: Float,
+    top: Float,
     mid: Float,
-    phase: Float,
-    amplitude: Float,
-    length: Float,
-    stroke: Float,
+    time: Float,
+    height: Float,
+    layer: WaterLayer,
     color: Color,
 ) {
     if (end - start < 1f) return
+    val rise = layer.rise.toPx() * height
+    val length = layer.length.toPx()
+    val phase = time * layer.turnsPerSecond * TWO_PI + layer.offset
+    val calmIn = 14.dp.toPx()
+    val calmOut = 22.dp.toPx()
     path.rewind()
     path.moveTo(start, mid)
-    val settle = length * 0.5f
     var x = start
-    while (x < end) {
-        val ease = ((end - x) / settle).coerceIn(0f, 1f) * ((x - start) / (settle * 0.5f)).coerceIn(0f, 1f)
-        path.lineTo(x, mid + sin((x - start) / length * TWO_PI - phase) * amplitude * ease)
-        x += 2f
+    while (true) {
+        val ease = smooth((x - start) / calmIn) * smooth((end - x) / calmOut)
+        val crest = (1f + sin((x - start) / length * TWO_PI - phase)) / 2f
+        path.lineTo(x, top - rise * crest * ease)
+        if (x >= end) break
+        x = minOf(x + 2f, end)
     }
     path.lineTo(end, mid)
-    drawPath(path, color, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    path.close()
+    drawPath(path, color.copy(alpha = color.alpha * layer.alpha))
 }
 
-private val THUMB_RADIUS = 6.5.dp
+private fun smooth(t: Float): Float {
+    val c = t.coerceIn(0f, 1f)
+    return c * c * (3f - 2f * c)
+}
 
-/** How tall the wave stands while paused, as a share of its playing height. */
-private const val WAVE_AT_REST = 0.45f
-private const val WAVE_TURNS_PER_SECOND = 0.45f
+private val TRACK = 6.dp
+private val THUMB_WIDTH = 4.dp
+private val THUMB_HEIGHT = 22.dp
+private val GAP = 3.dp
+
+/** How high the water stands while paused, as a share of its playing height. */
+private const val WAVE_AT_REST = 0.4f
 private const val TWO_PI = (2 * Math.PI).toFloat()
+
 
 /**
  * A tile or card that gives a little under a finger and springs back, so a press is felt

@@ -1,12 +1,7 @@
 package com.aurawave.player.ui
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ViewList
-import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,25 +36,19 @@ import androidx.compose.ui.platform.LocalClipboard
 import com.aurawave.innertube.ArtistRef
 import com.aurawave.innertube.MusicLink
 import com.aurawave.player.data.PlaylistImporter
-import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,109 +58,63 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurawave.innertube.Track
 import com.aurawave.player.AppGraph
+import com.aurawave.player.data.PlaySource
 import com.aurawave.player.data.db.PlaylistSummary
 import com.aurawave.player.playback.PlayerConnection
 import kotlinx.coroutines.launch
 
-private enum class Shelf(val label: String) {
-    Overview("Overview"),
-    Liked("Liked songs"),
-    Playlists("Playlists"),
-    Albums("Albums"),
-    Artists("Artists"),
-    Downloads("Downloads"),
-    History("History"),
+// The listener's own music, one tab each. AppRoot lays them out along the top.
+
+@Composable
+fun LikedTab(graph: AppGraph, player: PlayerConnection) {
+    val liked by graph.library.liked.collectAsStateWithLifecycle(initialValue = null)
+    val songs = liked
+    SongShelf(
+        songs = songs,
+        player = player,
+        emptyTitle = "No liked songs yet",
+        emptyBody = "Tap the heart on a song you love and it is kept here.",
+        from = songs?.let { PlaySource.liked(it.size, it.firstOrNull()?.coverUrl) },
+    )
 }
 
 @Composable
-fun LibraryScreen(
-    graph: AppGraph,
-    player: PlayerConnection,
-    onOpenPlaylist: (Long) -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenStats: () -> Unit,
-) {
-    var shelf by rememberSaveable { mutableStateOf(Shelf.Overview) }
-    val liked by graph.library.liked.collectAsStateWithLifecycle(initialValue = null)
-    val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
+fun PlaylistsTab(graph: AppGraph, player: PlayerConnection, onOpenPlaylist: (Long) -> Unit) {
     val playlists by graph.library.playlists.collectAsStateWithLifecycle(initialValue = null)
+    PlaylistShelf(graph, player, playlists, onOpenPlaylist)
+}
 
-    val grid by graph.settings.libraryGrid.flow.collectAsStateWithLifecycle()
-    // "Import from a link" on the overview: the playlists open with the link box already up.
-    var importOnOpen by remember { mutableStateOf(false) }
-    // The library opens on everything at a glance; a collection opens over it, and Back returns.
-    BackHandler(enabled = shelf != Shelf.Overview) { shelf = Shelf.Overview }
+@Composable
+fun AlbumsTab(graph: AppGraph) = AlbumShelf(graph)
 
+@Composable
+fun ArtistsTab(graph: AppGraph) = ArtistShelf(graph)
+
+@Composable
+fun DownloadsTab(graph: AppGraph, player: PlayerConnection) = DownloadShelf(graph, player)
+
+/** Everything played, most recent first. Opened from the menu at the top. */
+@Composable
+fun HistoryScreen(graph: AppGraph, player: PlayerConnection, onBack: () -> Unit) {
+    val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
     Column(Modifier.fillMaxSize()) {
-        if (shelf == Shelf.Overview) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Your library",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = { graph.settings.libraryGrid.value = !grid }) {
-                    Icon(
-                        if (grid) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
-                        contentDescription = if (grid) "Show as a list" else "Show as a grid",
-                    )
-                }
-                IconButton(onClick = onOpenStats) { Icon(Icons.Rounded.Insights, contentDescription = "Listening stats") }
-                IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
-            }
-        } else {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { shelf = Shelf.Overview }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to your library") }
-                Text(shelf.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            }
-        }
-
-        when (shelf) {
-            Shelf.Overview -> LibraryOverview(
-                graph = graph,
-                liked = liked,
-                history = history,
-                playlists = playlists,
-                grid = grid,
-                onOpenPlaylists = {
-                    importOnOpen = true
-                    shelf = Shelf.Playlists
-                },
-                onOpenLiked = { shelf = Shelf.Liked },
-                onOpenHistory = { shelf = Shelf.History },
-                onOpenDownloads = { shelf = Shelf.Downloads },
-                onOpenAlbums = { shelf = Shelf.Albums },
-                onOpenArtists = { shelf = Shelf.Artists },
-                onOpenPlaylist = onOpenPlaylist,
-            )
-            Shelf.Liked -> SongShelf(
-                songs = liked,
-                player = player,
-                emptyTitle = "No liked songs yet",
-                emptyBody = "Tap the heart on a song you love and it is kept here.",
-            )
-            Shelf.History -> SongShelf(
-                songs = history,
-                player = player,
-                emptyTitle = "Nothing played yet",
-                emptyBody = "Songs you listen to appear here, most recent first.",
-            )
-            Shelf.Playlists -> PlaylistShelf(graph, player, playlists, onOpenPlaylist, askForLink = importOnOpen, onAsked = { importOnOpen = false })
-            Shelf.Albums -> AlbumShelf(graph)
-            Shelf.Downloads -> DownloadShelf(graph, player)
-            Shelf.Artists -> ArtistShelf(graph)
-        }
+        BackBar(onBack, title = "Listening history")
+        SongShelf(
+            songs = history,
+            player = player,
+            emptyTitle = "Nothing played yet",
+            emptyBody = "Songs you listen to appear here, most recent first.",
+        )
     }
 }
 
 @Composable
-private fun SongShelf(songs: List<Track>?, player: PlayerConnection, emptyTitle: String, emptyBody: String) {
+private fun SongShelf(songs: List<Track>?, player: PlayerConnection, emptyTitle: String, emptyBody: String, from: PlaySource? = null) {
     val currentId = player.current?.mediaId
     when {
         songs == null -> Unit // still reading the library
         songs.isEmpty() -> MessageBox(title = emptyTitle, body = emptyBody)
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
             item {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -184,12 +127,12 @@ private fun SongShelf(songs: List<Track>?, player: PlayerConnection, emptyTitle:
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    OutlinedButton(onClick = { player.play(songs.shuffled()) }) {
+                    OutlinedButton(onClick = { player.play(songs.shuffled(), from = from) }) {
                         Icon(Icons.Rounded.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Shuffle")
                     }
-                    Button(onClick = { player.play(songs) }) {
+                    Button(onClick = { player.play(songs, from = from) }) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Play")
@@ -200,7 +143,7 @@ private fun SongShelf(songs: List<Track>?, player: PlayerConnection, emptyTitle:
                 TrackRow(
                     track = track,
                     isCurrent = track.videoId == currentId,
-                    onClick = { player.play(songs, i) },
+                    onClick = { player.play(songs, i, from) },
                     onPlayNext = { player.playNext(track) },
                     onAddToQueue = { player.addToQueue(track) },
                 )
@@ -263,7 +206,7 @@ private fun AlbumShelf(graph: AppGraph) {
     }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(150.dp),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = listEnd()),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.fillMaxSize(),
@@ -281,7 +224,7 @@ private fun ArtistShelf(graph: AppGraph) {
         MessageBox(title = "No artists followed", body = "Open an artist and tap Follow to keep them here.")
         return
     }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
         items(list, key = { it.id }) { a ->
             Row(
                 Modifier.fillMaxWidth().clickable { actions.openArtist(ArtistRef(a.name, a.id)) }.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -301,19 +244,15 @@ private fun PlaylistShelf(
     player: PlayerConnection,
     playlists: List<PlaylistSummary>?,
     onOpenPlaylist: (Long) -> Unit,
-    /** Open with the link box already showing. */
-    askForLink: Boolean = false,
-    onAsked: () -> Unit = {},
 ) {
     val actions = LocalSongActions.current
     var naming by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(askForLink) }
-    LaunchedEffect(Unit) { onAsked() }
+    var importing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val progress by graph.importer.progress.collectAsStateWithLifecycle()
     if (playlists == null) return
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listEnd())) {
         item {
             Row(
                 Modifier.fillMaxWidth().clickable { naming = true }.padding(horizontal = 16.dp, vertical = 8.dp),

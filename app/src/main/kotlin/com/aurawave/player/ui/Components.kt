@@ -138,7 +138,7 @@ fun TrackRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            .padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -217,6 +217,13 @@ fun TrackRow(
 
 /** Whether swiping a song in a list does anything (a setting). Provided by AppRoot. */
 val LocalSwipeSongs = compositionLocalOf { true }
+
+/** How much of the screen's bottom the mini player and the system bar cover. Provided by AppRoot. */
+val LocalListEnd = compositionLocalOf { 0.dp }
+
+/** The space a scrolling page leaves at its end, so its last row can be scrolled clear of the mini player. */
+@Composable
+fun listEnd(extra: Dp = 16.dp): Dp = LocalListEnd.current + extra
 
 /**
  * Swipe a song right to play it next, left to like it. The row follows the finger and

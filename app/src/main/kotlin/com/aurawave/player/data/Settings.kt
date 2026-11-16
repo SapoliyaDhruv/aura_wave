@@ -31,10 +31,22 @@ class Settings(context: Context) {
     val themeBackdrop = StringPref("theme_backdrop", "Dusk")
     /** Where the accent colour comes from: "Cover" for the playing song's cover, or the name of a fixed colour. */
     val themeAccent = StringPref("theme_accent", "Cover")
-    /** The library's collections as a grid of covers (true) or as a list. */
-    val libraryGrid = BoolPref("library_grid", true)
-    /** Swiping a song in a list queues it (right) or likes it (left). */
-    val swipeSongs = BoolPref("swipe_songs", true)
+    /** Swiping a song in a list queues it (right) or likes it (left). Off by default: sideways swipes move between tabs. */
+    val swipeSongs = BoolPref("swipe_songs", false)
+    /** The tabs along the top, by name, in the listener's order; the first is where the app opens. Empty: the default order. */
+    val tabOrder = ListPref("tab_order")
+    /** The tab the app opens on, by name. */
+    val openTab = StringPref("open_tab", "Home")
+
+    // ---------- where the listener left off ----------
+
+    /** The collection the newest queue was started from, as [PlaySource.encode] wrote it; empty for none. */
+    val lastPlayed = StringPref("last_played", "")
+    /**
+     * The songs of that collection, by id. Home offers play and pause only while the song on
+     * is one of them, however the queue was changed since (a widget, Android Auto, autoplay).
+     */
+    val lastPlayedIds = ListPref("last_played_ids")
 
     // ---------- sound ----------
 
