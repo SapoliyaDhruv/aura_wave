@@ -1,74 +1,133 @@
 # AuraWave
 
-A personal music player for web and Android. It plays the exact song you picked, finds songs from a line of their lyrics, and builds a home page from what you actually listen to.
+A music player for Android, written in Kotlin. It plays YouTube Music's audio-only streams
+directly in a native player, with podcasts, downloads, lyrics and an optional video view.
 
-> **A native Android rewrite is in progress in [`native/`](native/README.md).** It plays audio-only
-> streams in a native player instead of a hidden YouTube embed, and installs beside this app.
-> Everything below describes the current web-based app.
+It installs as `com.aurawave.player`. The first AuraWave was a web app in an Android shell
+(`com.aurawave.music`) that played a hidden YouTube video; this app replaced it. The old
+app's code is in this repository's history, before the commit that removed it, and its
+backup files can still be restored here (Settings › Restore from a backup).
 
-## How it finds the right song
-
-Every song is played from **YouTube Music's official audio tracks**, matched by title, artist and duration:
-
-- Search results come straight from YouTube Music, so what you tap is what plays.
-- Songs from elsewhere (Spotify imports, older library entries) go through a strict matcher (`shared/match.js`). It rejects same-named songs by other artists and versions you didn't ask for: instrumental, karaoke, slowed, lofi, sped up, 8D, jhankar, covers, live, clips.
-- If there's no confident match, the song is **skipped with a message**. It never plays something else in its place.
-- If a version is wrong anyway, open the player and tap **Not the right song?** to pick the right one. That choice is remembered.
-
-## Lyrics search
-
-Type any line you remember into Search, for example "hum tere bin ab reh nahi sakte". YouTube Music matches lyrics, and the top result shows the line it matched.
-
-## Recommendations
-
-`src/services/recommender.js` works entirely from your own listening:
-
-1. Every song you touched gets a weight. Likes and full listens add to it, skips subtract, and older activity slowly fades.
-2. Your strongest songs (at most two per artist) become seeds. Each seed's YouTube Music radio provides candidates.
-3. Candidates are ranked by how many of your seeds point to them and how much you like their artists. Hidden songs, hidden artists and artists you keep skipping are filtered out.
-4. The result becomes shelves (a time-of-day mix, artist mixes, "Because you played…", Fresh finds, On repeat, Rediscover). Each song says why it's there.
-
-When your queue ends, autoplay continues with similar songs, minus anything heard this session.
-
-## Project layout
-
-```
-api/                 Vercel serverless functions (also run by the Vite dev server)
-  _lib/ytmusic.js    YouTube Music client: search, resolve, radio, artist, lyrics
-  music/*.js         /api/music/search | resolve | radio | artist | lyrics
-  spotify/playlist.js  public Spotify playlist import
-  youtube/search.js  legacy endpoint kept for older installed app builds
-shared/match.js      song matching rules, used by server and client
-src/
-  services/          audio engine, catalog (API + caching), library, recommender, lyrics
-  state/             player, router, overlays, toasts
-  views/             Home, Search, Library, Collection, Artist, Settings, Onboarding
-  components/        player UI, lyrics, queue, sheets, shared UI
-  styles/app.css     design system (colours follow the playing song's cover)
-```
-
-## Develop
+## Build and install
 
 ```bash
-npm install
-npm run dev        # http://localhost:5173 (the /api routes run locally too)
-npm run build
-npm run lint
+./gradlew :app:assembleRelease     # signed, minified: app/build/outputs/apk/release/app-release.apk (~4 MB)
+./gradlew :app:assembleDebug       # unminified, debug-signed: app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-## Deploy and build Android
+Needs JDK 17 and Android SDK platform 36. `local.properties` must point `sdk.dir` at the SDK.
 
-The Android app calls the deployed backend (`https://aurawave-music.vercel.app` by default; set `VITE_API_BASE` to change it). **Redeploy the `api/` folder to Vercel before installing a new APK**, or the app will be calling the old endpoints.
+### The release key
+
+Release builds are signed with the key in `signing/` (`aurawave-release.jks` and
+`keystore.properties`, which holds its passwords). That folder is not in git. **Back it up**:
+Android installs an update only over an app signed with the same key, so without it the next
+version can only be installed after uninstalling, which deletes the library on the phone.
+Without the folder, release builds fall back to the debug key.
+
+A debug and a release build cannot update each other (different keys). Pick one per phone.
+
+## Try it on an emulator
+
+The emulator needs several GB of memory of its own. On a machine with 8 GB or less, do not run it
+together with a Gradle build; test on a phone instead.
+
+With an emulator (AVD) named `aurawave_full` created from an Android 15 system image:
 
 ```bash
-npm run build
-npx cap sync android
-cd android && ./gradlew assembleDebug
-# APK: android/app/build/outputs/apk/debug/app-debug.apk
+~/Android/Sdk/emulator/emulator -avd aurawave_full -no-window -no-audio -gpu swiftshader_indirect &
+adb wait-for-device && adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.aurawave.player/.MainActivity
+tools/emu-ui.py texts            # what is on screen, with positions
+tools/emu-ui.py tap "Search"     # tap an element by its text
+adb exec-out screencap -p > shot.png
+adb shell dumpsys media_session | grep -A12 com.aurawave.player   # is it really playing?
 ```
 
-Set `YTM_REGION` in Vercel (default `IN`) to change which YouTube Music region the catalog comes from.
+Use a `default` or `google_apis` system image. The slim `aosp_atd` images return black screenshots.
 
-## Your data
+## When songs stop playing
 
-Liked songs, playlists, history and settings are stored on the device. Use **Settings → Back up library** before reinstalling or switching phones. Backups from the previous app version can also be restored there.
+YouTube changes how streams are served every few months. Check, in this order:
+
+```bash
+./gradlew :innertube:test -Plive      # talks to the real YouTube: search, radio, a playable stream
+```
+
+- **`audioStreamIsPlayable` fails**: stream extraction broke. Bump `newpipe` in
+  `gradle/libs.versions.toml` to the latest [NewPipeExtractor release](https://github.com/TeamNewPipe/NewPipeExtractor/releases)
+  and run the test again.
+- **The search / radio tests fail**: YouTube Music changed its response shape. The parsing is in
+  `innertube/src/main/kotlin/com/aurawave/innertube/InnerTube.kt`.
+
+- **`LiveFallbackTest` fails**: JioSaavn changed its search or its stream addresses
+  (`JioSaavn.kt`). The backup YouTube route is allowed to decline, and usually does: YouTube
+  serves only the first megabyte of those streams on most networks.
+
+When the usual route cannot play a song, the player tries the backup YouTube route, then
+JioSaavn for the same recording (`StreamUrlCache` in `playback/StreamDataSource.kt`). The player
+shows "Playing from JioSaavn" when that happens, and Settings has a switch to turn it off.
+
+Plain `./gradlew :innertube:test` runs only the offline tests. `./gradlew :app:testDebugUnitTest`
+checks the backup file format and the rules of the liked-songs sync.
+
+## Database
+
+The library is a Room database (`data/db/AuraDatabase.kt`). Every released schema is kept in
+`app/schemas/`, and each version change is an `AutoMigration`, so updating the app never loses
+the library. Add a table or column: bump `version`, add `AutoMigration(from, to)`, build once to
+export the new schema, and commit it.
+
+## Layout
+
+```
+innertube/   Plain Kotlin, no Android. Runs and is tested on the desktop.
+  InnerTube.kt        YouTube Music catalogue: search, suggestions, radio, artists, lyrics, resolve
+  StreamResolver.kt   video id -> audio-only stream URL (via NewPipeExtractor)
+  Match.kt            "is this the recording the listener asked for?" Ported from the old app's matcher,
+                      kept as src/test/fixtures/match.js;
+                      MatchParityTest checks it against that file's answers.
+  BackupStreams.kt    a second way to get a stream from YouTube; accepts only one that plays to the end
+  JioSaavn.kt         the same recording from JioSaavn, when YouTube cannot play a song
+  Spotify.kt          public Spotify playlists, read on the phone
+  Loudness.kt         each song's measured loudness, for volume levelling
+  Account.kt          the optional YouTube Music login (cookies + SAPISIDHASH)
+app/         The Android app (Jetpack Compose + Media3).
+  playback/PlaybackService.kt   owns the player: notification, audio focus, autoplay, skipping broken songs, sleep timer,
+                                queue memory, podcast resume, widget, Android Auto (MediaTree.kt)
+  playback/StreamDataSource.kt  downloads first, then the disk cache, then the network; per-network quality
+  playback/SoundEngine.kt       equaliser, bass, levelling; the player volume is the product of several factors
+  playback/Fades.kt             fades on play/pause/skip, and crossfade (a short-lived second player)
+  playback/Downloads.kt         offline songs (Media3 DownloadManager, own folder, foreground service)
+  playback/PlayerConnection.kt  what the screens use to watch and control the player
+  playback/PlayerWidget.kt      the home-screen widget: a 4×2 card, or a one-row strip when resized
+  data/Library.kt               likes, history, playlists, saved albums, followed artists and shows, episode progress
+  data/Recommender.kt           the Home feed (ported from the old app's recommender.js)
+  data/Backup.kt                backup/restore; also reads the old app's backup files
+  data/Account.kt               YouTube Music sync
+  data/Updates.kt               looks for a newer version among the GitHub releases
+  data/CrashLog.kt              keeps the last crash, to share from Settings
+  ui/                           the screens
+  ui/Motion.kt                  the app's animations: the cover travelling into the player, page changes, play/pause, the heart
+```
+
+## Publishing a new version
+
+The app looks for updates among this repository's GitHub releases (`data/Updates.kt`), once a
+day and from Settings › Check for updates.
+
+1. Raise `versionCode` and `versionName` in `app/build.gradle.kts` and build the release APK.
+2. On GitHub, create a release tagged with the version, like `v3.0.1`, and attach
+   `app-release.apk`. What you write in the release's description is shown in the app as
+   what changed.
+
+Phones on an older version then offer the new one. A release must be signed with the same
+key as the installed app, or Android refuses to install it over the old one.
+
+## Licence
+
+AuraWave is free software under the GNU General Public License, version 3 (`LICENSE`). It
+includes NewPipeExtractor, which is GPL-3.0, so it has to be: anyone you give the APK to
+may also have the source, and may share and change it under the same licence.
+The Bricolage Grotesque and Figtree fonts are under the SIL Open Font License; see `licenses/`.
