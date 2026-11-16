@@ -2,6 +2,10 @@
 
 A personal music player for web and Android. It plays the exact song you picked, finds songs from a line of their lyrics, and builds a home page from what you actually listen to.
 
+> **A native Android rewrite is in progress in [`native/`](native/README.md).** It plays audio-only
+> streams in a native player instead of a hidden YouTube embed, and installs beside this app.
+> Everything below describes the current web-based app.
+
 ## How it finds the right song
 
 Every song is played from **YouTube Music's official audio tracks**, matched by title, artist and duration:

@@ -7,3 +7,6 @@ dist
 *.apk
 public/AuraWave.apk
 scratch
+
+# The native Kotlin app is built with Gradle, not deployed to Vercel
+native
