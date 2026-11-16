@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -47,6 +49,7 @@ import coil3.compose.AsyncImage
 import com.aurawave.innertube.InnerTube
 import com.aurawave.innertube.Track
 import com.aurawave.player.data.Library
+import com.aurawave.player.data.Recommender
 import com.aurawave.player.data.LyricsStore
 import com.aurawave.player.playback.PlayerConnection
 import kotlinx.coroutines.delay
@@ -65,15 +68,17 @@ fun formatTime(ms: Long): String {
 }
 
 /** Removes "(From "Film")" style credits for compact display. */
-fun shortTitle(title: String): String =
-    title.replace(Regex("""\s*\((from|feat\.?|ft\.?)[^)]*\)""", RegexOption.IGNORE_CASE), "").trim().ifEmpty { title }
+fun shortTitle(title: String): String = Recommender.shortTitle(title)
+
+/** The picture size, in pixels, to ask YouTube for when a cover is shown at [size]. */
+@Composable
+fun coverPx(size: Dp): Int = with(LocalDensity.current) { size.roundToPx() }.coerceIn(64, 720)
 
 /** Cover art, requested at the size it is shown so lists stay light on data. */
 @Composable
 fun Artwork(url: String?, size: Dp, modifier: Modifier = Modifier, corner: Dp = 6.dp) {
-    val px = with(LocalDensity.current) { size.roundToPx() }.coerceIn(64, 720)
     AsyncImage(
-        model = InnerTube.bigCover(url, px),
+        model = InnerTube.bigCover(url, coverPx(size)),
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier
@@ -91,10 +96,18 @@ fun TrackRow(
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Menu entries that only make sense where the row is shown, like "Remove from this playlist". */
+    extraActions: List<Pair<String, () -> Unit>> = emptyList(),
+    /** Shown in place of the menu button (a drag handle while reordering). */
+    trailing: (@Composable () -> Unit)? = null,
+    /** Replaces the artist line, e.g. with the reason a song was recommended. */
+    subtitle: String? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val library = LocalLibrary.current
+    val actions = LocalSongActions.current
     val liked = track.videoId in LocalLikedIds.current
+    val download = LocalDownloads.current[track.videoId]
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -113,13 +126,33 @@ fun TrackRow(
                 overflow = TextOverflow.Ellipsis,
             )
             val duration = if (track.durationSec > 0) " · ${formatTime(track.durationSec * 1000L)}" else ""
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    download?.done == true -> Icon(
+                        Icons.Rounded.DownloadDone,
+                        contentDescription = "Downloaded",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp).padding(end = 2.dp),
+                    )
+                    download?.active == true -> Icon(
+                        Icons.Rounded.Downloading,
+                        contentDescription = "Downloading",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp).padding(end = 2.dp),
+                    )
+                }
             Text(
-                text = track.artist + duration,
+                text = subtitle ?: (track.artist + duration),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            }
+        }
+        if (trailing != null) {
+            trailing()
+            return@Row
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
@@ -128,10 +161,22 @@ fun TrackRow(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("Play next") }, onClick = { menuOpen = false; onPlayNext() })
                 DropdownMenuItem(text = { Text("Add to queue") }, onClick = { menuOpen = false; onAddToQueue() })
+                DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuOpen = false; actions.addToPlaylist(listOf(track)) })
                 DropdownMenuItem(
                     text = { Text(if (liked) "Remove from Liked songs" else "Like") },
                     onClick = { menuOpen = false; library.setLiked(track, !liked) },
                 )
+                when {
+                    download?.done == true || download?.active == true ->
+                        DropdownMenuItem(text = { Text(if (download.done) "Remove download" else "Cancel download") }, onClick = { menuOpen = false; actions.removeDownload(track.videoId) })
+                    else -> DropdownMenuItem(text = { Text("Download") }, onClick = { menuOpen = false; actions.download(listOf(track)) })
+                }
+                track.leadArtist()?.let { artist ->
+                    DropdownMenuItem(text = { Text("Go to ${artist.name}") }, onClick = { menuOpen = false; actions.openArtist(artist) })
+                }
+                extraActions.forEach { (label, action) ->
+                    DropdownMenuItem(text = { Text(label) }, onClick = { menuOpen = false; action() })
+                }
             }
         }
     }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android's own backup keeps the library and settings. It leaves out downloaded songs and
+  caches, and the YouTube Music login, which is promised to stay on this phone.
+-->
+<full-backup-content>
+    <exclude domain="file" path="downloads" />
+    <exclude domain="file" path="feed.json" />
+    <exclude domain="sharedpref" path="account.xml" />
+    <exclude domain="file" path="account_remote_likes.txt" />
+    <exclude domain="root" path="app_webview" />
+</full-backup-content>

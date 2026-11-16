@@ -58,6 +58,9 @@ class PlayerConnection(private val context: Context) {
 
     val positionMs: Long get() = controller?.currentPosition ?: 0L
 
+    /** False while the app is off screen and for a moment after it returns; the state above is then stale. */
+    val connected: Boolean get() = controller != null
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             sync(player, timelineChanged = events.contains(Player.EVENT_TIMELINE_CHANGED))
@@ -133,10 +136,45 @@ class PlayerConnection(private val context: Context) {
         c.addMediaItem(c.currentMediaItemIndex + 1, track.toMediaItem())
     }
 
-    fun addToQueue(track: Track) {
+    fun addToQueue(track: Track) = addToQueue(listOf(track))
+
+    /** Adds songs to the end of the queue in one step, however many there are. */
+    fun addToQueue(tracks: List<Track>) {
+        val c = controller ?: return
+        if (tracks.isEmpty()) return
+        if (c.mediaItemCount == 0) return play(tracks)
+        c.addMediaItems(tracks.map { it.toMediaItem() })
+    }
+
+    /** Moves a song in the queue. */
+    fun move(from: Int, to: Int) {
+        val c = controller ?: return
+        if (from == to || from !in 0 until c.mediaItemCount || to !in 0 until c.mediaItemCount) return
+        c.moveMediaItem(from, to)
+    }
+
+    fun remove(queueIndex: Int) {
+        val c = controller ?: return
+        if (queueIndex in 0 until c.mediaItemCount) c.removeMediaItem(queueIndex)
+    }
+
+    /** Removes everything after the playing song. */
+    fun clearUpcoming() {
+        val c = controller ?: return
+        val from = c.currentMediaItemIndex + 1
+        if (from < c.mediaItemCount) c.removeMediaItems(from, c.mediaItemCount)
+    }
+
+    /** Swaps the playing song for another recording of it, starting at [positionMs]. */
+    fun replaceCurrent(track: Track, positionMs: Long = 0) {
         val c = controller ?: return
         if (c.mediaItemCount == 0) return play(listOf(track))
-        c.addMediaItem(track.toMediaItem())
+        val index = c.currentMediaItemIndex
+        val wasPlaying = c.playWhenReady
+        c.replaceMediaItem(index, track.toMediaItem())
+        if (positionMs > 0) c.seekTo(index, positionMs)
+        c.prepare()
+        if (wasPlaying || positionMs == 0L) c.play()
     }
 
     fun togglePlay() {
@@ -150,6 +188,13 @@ class PlayerConnection(private val context: Context) {
     /** Restarts the song, or goes to the previous one when pressed near the start. */
     fun previous() {
         controller?.seekToPrevious()
+    }
+
+    /** Jumps back or ahead within the playing episode or song. */
+    fun seekBy(deltaMs: Long) {
+        val c = controller ?: return
+        val target = (c.currentPosition + deltaMs).coerceAtLeast(0)
+        c.seekTo(if (durationMs > 0) target.coerceAtMost(durationMs - 1000) else target)
     }
 
     fun seekTo(positionMs: Long) {

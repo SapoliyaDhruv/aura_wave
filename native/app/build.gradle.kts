@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -16,12 +18,29 @@ android {
         applicationId = "com.aurawave.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "3.0.0-alpha1"
+        versionCode = 10
+        versionName = "3.0.0"
+    }
+
+    // The release key lives in native/signing/ (not in git). Without it, release builds are signed
+    // with the debug key so they still install for testing, but cannot update a properly signed install.
+    val signing = Properties().apply {
+        rootProject.file("signing/keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+    }
+    signingConfigs {
+        if (!signing.isEmpty) {
+            create("release") {
+                storeFile = rootProject.file("signing/${signing.getProperty("storeFile")}")
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -80,4 +99,6 @@ dependencies {
 
     implementation(libs.room.runtime)
     ksp(libs.room.compiler)
+
+    testImplementation(kotlin("test-junit"))
 }

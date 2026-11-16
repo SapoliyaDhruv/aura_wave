@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Laid over the widget's colour: the song's colour shows on the cover's side and settles into ink towards the controls. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="0"
+        android:endColor="#D914101B"
+        android:startColor="#0014101B"
+        android:type="linear" />
+    <corners android:radius="20dp" />
+</shape>

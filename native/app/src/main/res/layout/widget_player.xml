@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen widget, one row high: cover, song, and previous / play-pause / next. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_background" />
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_shade" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="8dp">
+
+        <ImageView
+            android:id="@+id/widget_cover"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            android:src="@drawable/widget_cover_placeholder" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_idle_title"
+                android:textColor="#F3EFF8"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_artist"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_idle_body"
+                android:textColor="#C9C2D6"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/widget_previous"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/widget_previous"
+            android:scaleType="center"
+            android:src="@drawable/ic_widget_previous" />
+
+        <FrameLayout
+            android:id="@+id/widget_play"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:contentDescription="@string/widget_play">
+
+            <ImageView
+                android:id="@+id/widget_play_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:src="@drawable/widget_circle" />
+
+            <ImageView
+                android:id="@+id/widget_play_icon"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:layout_gravity="center"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_widget_play"
+                android:tint="#17111F" />
+        </FrameLayout>
+
+        <ImageButton
+            android:id="@+id/widget_next"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/widget_next"
+            android:scaleType="center"
+            android:src="@drawable/ic_widget_next" />
+    </LinearLayout>
+</FrameLayout>

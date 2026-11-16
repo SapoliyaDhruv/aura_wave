@@ -4,6 +4,8 @@ import com.aurawave.innertube.InnerTube
 import com.aurawave.innertube.Lrclib
 import com.aurawave.innertube.SongLyrics
 import com.aurawave.innertube.Track
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -20,6 +22,10 @@ class LyricsStore(private val lrclib: Lrclib, private val tube: InnerTube) {
             // "Nothing found" may just have been a bad connection, so it is only trusted briefly.
             if (e.lyrics != null || System.currentTimeMillis() - e.at < MISS_MEMORY_MS) return e.lyrics
         }
+        return withContext(Dispatchers.Default) { find(track) }
+    }
+
+    private suspend fun find(track: Track): SongLyrics? {
         val fromLrclib = lrclib.find(track)
         val lyrics = when {
             fromLrclib?.isSynced == true -> fromLrclib

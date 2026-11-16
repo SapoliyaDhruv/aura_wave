@@ -1,7 +1,15 @@
 package com.aurawave.player.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.TextButton
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -74,12 +82,17 @@ fun LyricsPanel(player: PlayerConnection, modifier: Modifier = Modifier) {
 
 @Composable
 private fun SyncedLyrics(lyrics: SongLyrics, player: PlayerConnection) {
+    val library = LocalLibrary.current
+    val videoId = player.current?.mediaId.orEmpty()
+    // The listener's correction for lyrics that run early or late on this song.
+    val offset by remember(videoId) { library.lyricsOffset(videoId) }.collectAsStateWithLifecycle(initialValue = 0L)
     val position = rememberPositionMs(player, intervalMs = 200)
     // Lines light up a touch early, the way a singer breathes in before the word.
-    val active = lyrics.lines.indexOfLast { it.timeMs <= position + 250 }
+    val active = lyrics.lines.indexOfLast { it.timeMs + offset <= position + 250 }
     val listState = rememberLazyListState()
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val restingOffset = with(LocalDensity.current) { (maxHeight / 3).roundToPx() }
         LaunchedEffect(active) {
             // Keep the current line a third of the way down, unless the listener is browsing the lyrics.
@@ -87,22 +100,57 @@ private fun SyncedLyrics(lyrics: SongLyrics, player: PlayerConnection) {
         }
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 24.dp)) {
             itemsIndexed(lyrics.lines) { i, line ->
+                // The line being sung eases up to full brightness and size; the rest sit dimmer and a touch smaller.
+                val lit = animateFloatAsState(if (i == active) 1f else 0f, tween(280), label = "lyricLine")
                 Text(
                     text = line.text.ifEmpty { "♪" },
                     fontSize = 22.sp,
+                    fontFamily = MaterialTheme.typography.headlineSmall.fontFamily,
                     lineHeight = 30.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (i == active) Palette.Moon else Palette.Moon.copy(alpha = 0.38f),
+                    color = Palette.Moon,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(onClickLabel = "Jump to this line") { player.seekTo(line.timeMs) }
-                        .padding(vertical = 8.dp),
+                        .clickable(onClickLabel = "Jump to this line") { player.seekTo((line.timeMs + offset).coerceAtLeast(0)) }
+                        .padding(vertical = 8.dp)
+                        .graphicsLayer {
+                            val t = lit.value
+                            alpha = 0.38f + 0.62f * t
+                            scaleX = 0.94f + 0.06f * t
+                            scaleY = scaleX
+                            transformOrigin = TransformOrigin(0f, 0.5f)
+                        },
                 )
             }
             item { LyricsSource(lyrics.source) }
         }
     }
+    LyricsTiming(offset, onChange = { library.setLyricsOffset(videoId, it) })
+    }
 }
+
+/** Shifts synced lyrics for this song in half-second steps. */
+@Composable
+private fun LyricsTiming(offset: Long, onChange: (Long) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        TextButton(onClick = { onChange(offset - STEP_MS) }) { Text("Show earlier") }
+        Text(
+            when {
+                offset == 0L -> "Timing"
+                offset > 0 -> "+%.1f s".format(offset / 1000f)
+                else -> "%.1f s".format(offset / 1000f)
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .clickable(enabled = offset != 0L, onClickLabel = "Reset lyrics timing") { onChange(0) }
+                .padding(horizontal = 8.dp, vertical = 12.dp),
+        )
+        TextButton(onClick = { onChange(offset + STEP_MS) }) { Text("Show later") }
+    }
+}
+
+private const val STEP_MS = 500L
 
 @Composable
 private fun PlainLyrics(lyrics: SongLyrics) {

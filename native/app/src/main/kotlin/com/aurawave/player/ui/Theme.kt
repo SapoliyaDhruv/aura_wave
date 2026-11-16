@@ -4,6 +4,14 @@ import android.graphics.Bitmap
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import com.aurawave.player.R
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -49,40 +57,91 @@ data class Aura(val accent: Color, val deep: Color) {
 
 val LocalAura = compositionLocalOf { Aura.Default }
 
-@Composable
-fun AuraTheme(aura: Aura, content: @Composable () -> Unit) {
-    val scheme = darkColorScheme(
-        primary = aura.accent,
-        onPrimary = Palette.OnAura,
-        primaryContainer = aura.deep,
-        onPrimaryContainer = Palette.Moon,
-        secondary = aura.accent,
-        onSecondary = Palette.OnAura,
-        secondaryContainer = Palette.Raised,
-        onSecondaryContainer = Palette.Moon,
-        background = Palette.Ink,
-        onBackground = Palette.Moon,
-        surface = Palette.Ink,
-        onSurface = Palette.Moon,
-        surfaceVariant = Palette.Raised,
-        onSurfaceVariant = Palette.Haze,
-        surfaceContainerLowest = Palette.Ink,
-        surfaceContainerLow = Palette.Dusk,
-        surfaceContainer = Palette.Dusk,
-        surfaceContainerHigh = Palette.Raised,
-        surfaceContainerHighest = Palette.Raised,
-        outline = Palette.Faint,
-        outlineVariant = Palette.Line,
-        error = Palette.Danger,
+/** The old app's typefaces: Bricolage Grotesque for headings, Figtree for everything else. Both are variable fonts. */
+@OptIn(ExperimentalTextApi::class)
+private fun variable(res: Int, weights: List<FontWeight>, extra: (FontWeight) -> Array<FontVariation.Setting> = { emptyArray() }) =
+    FontFamily(weights.map { w -> Font(res, weight = w, variationSettings = FontVariation.Settings(FontVariation.weight(w.weight), *extra(w))) })
+
+private val Figtree = variable(R.font.figtree, listOf(FontWeight.Normal, FontWeight.Medium, FontWeight.SemiBold, FontWeight.Bold))
+
+private val Bricolage = variable(R.font.bricolage_grotesque, listOf(FontWeight.Medium, FontWeight.SemiBold, FontWeight.Bold, FontWeight.ExtraBold)) {
+    arrayOf(FontVariation.Setting("opsz", 36f))
+}
+
+private val AuraType: Typography = Typography().let { t ->
+    fun TextStyle.ui() = copy(fontFamily = Figtree)
+    fun TextStyle.display() = copy(fontFamily = Bricolage)
+    t.copy(
+        displayLarge = t.displayLarge.display(),
+        displayMedium = t.displayMedium.display(),
+        displaySmall = t.displaySmall.display(),
+        headlineLarge = t.headlineLarge.display(),
+        headlineMedium = t.headlineMedium.display(),
+        headlineSmall = t.headlineSmall.display(),
+        titleLarge = t.titleLarge.display(),
+        titleMedium = t.titleMedium.ui(),
+        titleSmall = t.titleSmall.ui(),
+        bodyLarge = t.bodyLarge.ui(),
+        bodyMedium = t.bodyMedium.ui(),
+        bodySmall = t.bodySmall.ui(),
+        labelLarge = t.labelLarge.ui(),
+        labelMedium = t.labelMedium.ui(),
+        labelSmall = t.labelSmall.ui(),
     )
-    CompositionLocalProvider(LocalAura provides aura) {
-        MaterialTheme(colorScheme = scheme, content = content)
+}
+
+/**
+ * The app's colours for the playing song's cover. The colour scheme changes once per song.
+ * The slow drift from one song's colour to the next is carried by [LocalAura] alone, so
+ * only the few places that draw with it are redrawn while it eases, not every screen.
+ */
+@Composable
+fun AuraTheme(coverUrl: String?, content: @Composable () -> Unit) {
+    val target = rememberAuraOf(coverUrl)
+    val scheme = remember(target) {
+        darkColorScheme(
+            primary = target.accent,
+            onPrimary = Palette.OnAura,
+            primaryContainer = target.deep,
+            onPrimaryContainer = Palette.Moon,
+            secondary = target.accent,
+            onSecondary = Palette.OnAura,
+            secondaryContainer = Palette.Raised,
+            onSecondaryContainer = Palette.Moon,
+            background = Palette.Ink,
+            onBackground = Palette.Moon,
+            surface = Palette.Ink,
+            onSurface = Palette.Moon,
+            surfaceVariant = Palette.Raised,
+            onSurfaceVariant = Palette.Haze,
+            surfaceContainerLowest = Palette.Ink,
+            surfaceContainerLow = Palette.Dusk,
+            surfaceContainer = Palette.Dusk,
+            surfaceContainerHigh = Palette.Raised,
+            surfaceContainerHighest = Palette.Raised,
+            outline = Palette.Faint,
+            outlineVariant = Palette.Line,
+            error = Palette.Danger,
+        )
+    }
+    MaterialTheme(colorScheme = scheme, typography = AuraType) {
+        DriftingAura(target, content)
     }
 }
 
-/** The accent for a cover image, eased in so the interface drifts from one song's colour to the next. */
+/** Eases [LocalAura] towards [target]. Only what reads [LocalAura] is redrawn on each step. */
 @Composable
-fun rememberAura(coverUrl: String?): Aura {
+private fun DriftingAura(target: Aura, content: @Composable () -> Unit) {
+    val accent by animateColorAsState(target.accent, tween(AURA_DRIFT_MS), label = "aura")
+    val deep by animateColorAsState(target.deep, tween(AURA_DRIFT_MS), label = "auraDeep")
+    CompositionLocalProvider(LocalAura provides Aura(accent, deep), content = content)
+}
+
+private const val AURA_DRIFT_MS = 1200
+
+/** The accent for a cover image; the default until the cover has been read. */
+@Composable
+private fun rememberAuraOf(coverUrl: String?): Aura {
     val context = LocalContext.current
     var target by remember { mutableStateOf(Aura.Default) }
     LaunchedEffect(coverUrl) {
@@ -95,16 +154,14 @@ fun rememberAura(coverUrl: String?): Aura {
         val image = (SingletonImageLoader.get(context).execute(request) as? SuccessResult)?.image ?: return@LaunchedEffect
         target = withContext(Dispatchers.Default) { auraOf(image.toBitmap()) }
     }
-    val accent by animateColorAsState(target.accent, tween(1200), label = "aura")
-    val deep by animateColorAsState(target.deep, tween(1200), label = "auraDeep")
-    return Aura(accent, deep)
+    return target
 }
 
 /**
  * Picks the most characterful colour of a cover: a hue histogram weighted by
  * saturation, then fixed lightness so text on it always stays readable.
  */
-private fun auraOf(bitmap: Bitmap): Aura {
+internal fun auraOf(bitmap: Bitmap): Aura {
     val size = 24
     val small = Bitmap.createScaledBitmap(bitmap, size, size, true)
     val pixels = IntArray(size * size)

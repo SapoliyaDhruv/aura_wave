@@ -7,18 +7,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Downloads waiting for Wi-Fi are rescheduled after a restart. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".AuraApp"
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.AuraWave">
 
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- The screens redraw themselves when the phone is turned or resized, so open pages are not lost. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
@@ -28,14 +39,54 @@
             </intent-filter>
         </activity>
 
-        <!-- Owns the player. Exported so the system, Bluetooth devices and Android Auto can control it. -->
+        <!-- Owns the player. Exported so the system, Bluetooth devices and Android Auto can control and browse it. -->
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
+                <!-- Android Auto, the system's media resumption and other media browsers find the app through this. -->
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <service
+            android:name=".playback.AuraDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync">
+            <!-- How the scheduler restarts downloads that were waiting for Wi-Fi after the app was closed. -->
+            <intent-filter>
+                <action android:name="androidx.media3.exoplayer.downloadService.action.RESTART" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name="androidx.media3.exoplayer.scheduler.PlatformScheduler$PlatformSchedulerService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <receiver
+            android:name=".playback.PlayerWidget"
+            android:exported="false"
+            android:label="AuraWave">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Play on headphones or in a car while the app is closed resumes the saved queue. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

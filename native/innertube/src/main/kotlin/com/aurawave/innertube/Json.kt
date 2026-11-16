@@ -40,3 +40,15 @@ internal fun JsonElement?.collect(key: String, out: MutableList<JsonElement> = m
     }
     return out
 }
+
+/** Like [collect], but for several keys at once, keeping the order they appear in the document. */
+internal fun JsonElement?.collectAny(keys: Set<String>, out: MutableList<Pair<String, JsonElement>> = mutableListOf()): List<Pair<String, JsonElement>> {
+    when (this) {
+        is JsonObject -> for ((k, v) in this) {
+            if (k in keys && v !is JsonNull) out += k to v else v.collectAny(keys, out)
+        }
+        is JsonArray -> for (v in this) v.collectAny(keys, out)
+        else -> Unit
+    }
+    return out
+}

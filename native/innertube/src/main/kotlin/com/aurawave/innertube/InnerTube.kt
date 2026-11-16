@@ -53,7 +53,14 @@ class InnerTube(
         }
     }
 
-    private fun post(endpoint: String, body: JsonObjectBuilder.() -> Unit): Pair<Int, String> {
+    /**
+     * The listener's YouTube Music login, when they signed in. It is sent only with
+     * requests about their own account (library, likes, history), never with searches.
+     */
+    @Volatile
+    var account: AccountCookies? = null
+
+    private fun post(endpoint: String, body: JsonObjectBuilder.() -> Unit, auth: Boolean = false): Pair<Int, String> {
         val payload = buildJsonObject {
             putJsonObject("context") {
                 putJsonObject("client") {
@@ -70,17 +77,26 @@ class InnerTube(
             .header("User-Agent", UA)
             .header("Origin", ORIGIN)
             .header("Referer", "$ORIGIN/")
+            .apply {
+                val login = account
+                if (auth && login != null) {
+                    header("Cookie", login.cookie)
+                    header("Authorization", login.authorization(ORIGIN))
+                    header("X-Goog-AuthUser", "0")
+                    header("X-Origin", ORIGIN)
+                }
+            }
             .post(payload.toString().toRequestBody(JSON_TYPE))
             .build()
         return http.newCall(req).execute().use { it.code to it.body.string() }
     }
 
     /** One retry for dropped connections, server errors and an outdated client version. */
-    private suspend fun call(endpoint: String, body: JsonObjectBuilder.() -> Unit): JsonObject = withContext(Dispatchers.IO) {
+    private suspend fun call(endpoint: String, auth: Boolean = false, body: JsonObjectBuilder.() -> Unit): JsonObject = withContext(Dispatchers.IO) {
         var attempt = 0
         while (true) {
             val (status, text) = try {
-                post(endpoint, body)
+                post(endpoint, body, auth)
             } catch (e: IOException) {
                 if (attempt++ == 0) continue
                 throw e
@@ -299,13 +315,472 @@ class InnerTube(
         fun norm(s: String) = s.lowercase().replace(NOT_ASCII_ALNUM, "")
         val credited = more.filter { t -> t.artists.any { it.id == artistId || norm(it.name) == norm(artistName) } }
         val thumbs = header.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr
+        val shelves = parseShelves(page)
+        fun shelf(test: (String) -> Boolean) = shelves.firstOrNull { test(it.title.lowercase()) }
+        val albums = shelf { it == "albums" }
+        val singles = shelf { it.startsWith("singles") }
         return ArtistPage(
             id = artistId,
             name = artistName,
             imageUrl = thumbs.lastOrNull().at("url").str.orEmpty(),
             audience = runsText(header.at("monthlyListenerCount")),
             songs = (top + credited).uniqueById().take(30),
+            albums = albums?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album },
+            singles = singles?.items.orEmpty().mapNotNull { (it as? BrowseItem.Album)?.album },
+            playlists = shelves.filter { it.title.lowercase().let { t -> t.startsWith("playlists") || t == "featured on" } }
+                .flatMap { it.items }.mapNotNull { (it as? BrowseItem.Playlist)?.playlist }.distinctBy { it.id },
+            similar = shelf { it.startsWith("fans might also like") }?.items.orEmpty().mapNotNull { (it as? BrowseItem.Artist)?.artist },
+            allAlbums = albums?.takeIf { it.moreBrowseId.isNotEmpty() }?.let { it.moreBrowseId to it.moreParams },
+            allSingles = singles?.takeIf { it.moreBrowseId.isNotEmpty() }?.let { it.moreBrowseId to it.moreParams },
         )
+    }
+
+    /** Every album (or every single) of an artist: the page behind an artist page's "More" button. */
+    suspend fun artistReleases(browseId: String, params: String): List<AlbumRef> {
+        val page = call("browse") { put("browseId", browseId); put("params", params) }
+        return page.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Album)?.album }
+    }
+
+    // ---------- albums, playlists, explore ----------
+
+    suspend fun searchAlbums(query: String): List<AlbumRef> {
+        val data = call("search") { put("query", query); put("params", FILTER_ALBUMS) }
+        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Album)?.album }
+    }
+
+    /** YouTube Music's own playlists first, then playlists made by people. */
+    suspend fun searchPlaylists(query: String): List<PlaylistRef> = coroutineScope {
+        val featured = async { runCatching { playlistSearch(query, FILTER_FEATURED_PLAYLISTS) }.getOrDefault(emptyList()) }
+        val community = async { playlistSearch(query, FILTER_COMMUNITY_PLAYLISTS) }
+        (featured.await() + community.await()).distinctBy { it.id }
+    }
+
+    private suspend fun playlistSearch(query: String, filter: String): List<PlaylistRef> {
+        val data = call("search") { put("query", query); put("params", filter) }
+        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Playlist)?.playlist }
+    }
+
+    suspend fun searchPodcasts(query: String): List<PodcastRef> {
+        val data = call("search") { put("query", query); put("params", FILTER_PODCASTS) }
+        return data.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Podcast)?.podcast }
+    }
+
+    suspend fun album(browseId: String): AlbumPage? {
+        val page = call("browse") { put("browseId", browseId) }
+        val header = page.collect("musicResponsiveHeaderRenderer").firstOrNull()
+            ?: page.collect("musicDetailHeaderRenderer").firstOrNull()
+            ?: return null
+        val title = runsText(header.at("title"))
+        val parts = subtitleParts(header.at("subtitle", "runs").arr)
+        val artists = parseByline(header.at("straplineTextOne", "runs").arr).artists
+            .ifEmpty { parseByline(header.at("subtitle", "runs").arr).artists }
+        val cover = bestThumb(header.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr)
+        val album = AlbumRef(
+            id = browseId,
+            title = title,
+            artist = artists.joinToString(", ") { it.name },
+            year = parts.firstOrNull { YEAR.matches(it) }.orEmpty(),
+            coverUrl = cover,
+            type = parts.firstOrNull { it in ALBUM_TYPES } ?: "Album",
+        )
+        val shelf = page.collect("musicShelfRenderer").firstOrNull()
+        val tracks = shelf.at("contents").arr.mapNotNull { parseListItem(it.at("musicResponsiveListItemRenderer")) }.map { t ->
+            t.copy(
+                // Album rows carry no artwork of their own and sometimes no artist.
+                coverUrl = if (t.coverUrl.contains("i.ytimg.com")) cover.ifEmpty { t.coverUrl } else t.coverUrl,
+                artists = t.artists.ifEmpty { artists },
+                artist = if (t.artists.isEmpty() && artists.isNotEmpty()) album.artist else t.artist,
+                album = title,
+                albumId = browseId,
+                year = album.year,
+                kind = Kind.SONG,
+            )
+        }.uniqueById()
+        return AlbumPage(
+            album = album,
+            artists = artists,
+            info = runsText(header.at("secondSubtitle")),
+            description = runsText(header.collect("musicDescriptionShelfRenderer").firstOrNull().at("description")),
+            tracks = tracks,
+            more = parseShelves(page.at("contents", "twoColumnBrowseResultsRenderer", "secondaryContents") ?: page)
+                .filter { s -> s.items.any { it is BrowseItem.Album } },
+        )
+    }
+
+    /** A playlist and its songs, following YouTube's paging up to [maxTracks]. */
+    suspend fun playlist(playlistId: String, maxTracks: Int = 1000): PlaylistPage? {
+        val id = playlistId.removePrefix("VL")
+        val page = call("browse") { put("browseId", "VL$id") }
+        val header = page.collect("musicResponsiveHeaderRenderer").firstOrNull()
+            ?: page.collect("musicDetailHeaderRenderer").firstOrNull()
+        val tracks = page.collect("musicResponsiveListItemRenderer").mapNotNull(::parseListItem).toMutableList()
+        var token = continuationToken(page)
+        var pages = 0
+        while (token != null && tracks.size < maxTracks && pages++ < MAX_PAGES) {
+            val more = call("browse") { put("continuation", token) }
+            val found = more.collect("musicResponsiveListItemRenderer").mapNotNull(::parseListItem)
+            if (found.isEmpty()) break
+            tracks += found
+            token = continuationToken(more)
+        }
+        val title = runsText(header.at("title"))
+        if (header == null && tracks.isEmpty()) return null
+        val strap = runsText(header.at("straplineTextOne"))
+            .ifEmpty { header.at("facepile", "avatarStackViewModel", "text", "content").str.orEmpty() }
+        val parts = subtitleParts(header.at("subtitle", "runs").arr)
+        return PlaylistPage(
+            playlist = PlaylistRef(
+                id = id,
+                title = title.ifEmpty { "Playlist" },
+                author = strap.ifEmpty { parts.drop(1).firstOrNull { !YEAR.matches(it) }.orEmpty() },
+                coverUrl = bestThumb(header.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr)
+                    .ifEmpty { bestThumb(header.at("thumbnail", "croppedSquareThumbnailRenderer", "thumbnail", "thumbnails").arr) },
+            ),
+            info = runsText(header.at("secondSubtitle")),
+            description = runsText(header.collect("musicDescriptionShelfRenderer").firstOrNull().at("description"))
+                .ifEmpty { runsText(header.at("description")) },
+            tracks = tracks.uniqueById().take(maxTracks),
+        )
+    }
+
+    private fun continuationToken(page: JsonElement): String? =
+        page.collect("continuationCommand").firstOrNull().at("token").str
+
+    /**
+     * The rows of a YouTube Music browse page: Explore ("FEmusic_explore"), charts,
+     * moods and genres, new releases, one mood's playlists, or a "More" page.
+     */
+    suspend fun shelves(browseId: String, params: String = ""): List<Shelf> {
+        val page = call("browse") {
+            put("browseId", browseId)
+            if (params.isNotEmpty()) put("params", params)
+        }
+        return parseShelves(page)
+    }
+
+    private fun parseShelves(page: JsonElement): List<Shelf> =
+        page.collectAny(SHELF_KEYS).mapNotNull { (key, s) ->
+            val title: String
+            var moreId = ""
+            var moreParams = ""
+            if (key == "gridRenderer") {
+                title = runsText(s.at("header", "gridHeaderRenderer", "title"))
+            } else {
+                val h = s.at("header", "musicCarouselShelfBasicHeaderRenderer")
+                title = runsText(h.at("title"))
+                val more = h.at("moreContentButton", "buttonRenderer", "navigationEndpoint", "browseEndpoint")
+                    ?: h.at("title", "runs").arr.firstOrNull().at("navigationEndpoint", "browseEndpoint")
+                moreId = more.at("browseId").str.orEmpty()
+                moreParams = more.at("params").str.orEmpty()
+            }
+            val items = (s.at("contents").arr + s.at("items").arr).mapNotNull { item ->
+                item.at("musicTwoRowItemRenderer")?.let(::parseTwoRow)
+                    ?: item.at("musicResponsiveListItemRenderer")?.let(::parseListAny)
+                    ?: item.at("musicNavigationButtonRenderer")?.let(::parseCategory)
+                    ?: item.at("musicMultiRowListItemRenderer")?.let { parseEpisode(it)?.let(BrowseItem::Episode) }
+            }
+            if (items.isEmpty()) null else Shelf(title, items, moreId, moreParams)
+        }
+
+    // ---------- the listener's account (needs [account]) ----------
+
+    private fun requireAccount() {
+        if (account == null) throw InnerTubeException("Not signed in", 401)
+    }
+
+    /** Name, handle and picture of the signed-in account. */
+    suspend fun accountInfo(): AccountInfo? {
+        requireAccount()
+        val data = call("account/account_menu", auth = true) {}
+        val header = data.collect("activeAccountHeaderRenderer").firstOrNull() ?: return null
+        return AccountInfo(
+            name = runsText(header.at("accountName")),
+            handle = runsText(header.at("channelHandle")).ifEmpty { runsText(header.at("email")) },
+            photoUrl = header.at("accountPhoto", "thumbnails").arr.lastOrNull().at("url").str.orEmpty(),
+        )
+    }
+
+    /** Every song in the account's Liked music. */
+    suspend fun likedSongs(max: Int = 5000): List<Track> = authPlaylistTracks("LM", max)
+
+    /** The playlists in the account's library (made or saved there). */
+    suspend fun libraryPlaylists(): List<PlaylistRef> {
+        requireAccount()
+        val page = call("browse", auth = true) { put("browseId", "FEmusic_liked_playlists") }
+        val items = page.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Playlist)?.playlist }.toMutableList()
+        var token = continuationToken(page)
+        var pages = 0
+        while (token != null && pages++ < MAX_PAGES) {
+            val more = call("browse", auth = true) { put("continuation", token) }
+            val found = more.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Playlist)?.playlist }
+            if (found.isEmpty()) break
+            items += found
+            token = continuationToken(more)
+        }
+        // "Liked music" and "Episodes for later" are synced on their own.
+        return items.filter { it.id != "LM" && it.id != "SE" }.distinctBy { it.id }
+    }
+
+    /** A playlist's songs as the signed-in account sees it (private playlists included). */
+    suspend fun authPlaylistTracks(playlistId: String, max: Int = 5000): List<Track> {
+        requireAccount()
+        val id = playlistId.removePrefix("VL")
+        val page = call("browse", auth = true) { put("browseId", "VL$id") }
+        val tracks = page.collect("musicResponsiveListItemRenderer").mapNotNull(::parseListItem).toMutableList()
+        var token = continuationToken(page)
+        var pages = 0
+        while (token != null && tracks.size < max && pages++ < MAX_PAGES * 3) {
+            val more = call("browse", auth = true) { put("continuation", token) }
+            val found = more.collect("musicResponsiveListItemRenderer").mapNotNull(::parseListItem)
+            if (found.isEmpty()) break
+            tracks += found
+            token = continuationToken(more)
+        }
+        return tracks.uniqueById()
+    }
+
+    suspend fun savedAlbums(): List<AlbumRef> {
+        requireAccount()
+        val page = call("browse", auth = true) { put("browseId", "FEmusic_liked_albums") }
+        return page.collect("musicTwoRowItemRenderer").mapNotNull { (parseTwoRow(it) as? BrowseItem.Album)?.album }
+    }
+
+    suspend fun subscribedArtists(): List<ArtistSummary> {
+        requireAccount()
+        val page = call("browse", auth = true) { put("browseId", "FEmusic_library_corpus_artists") }
+        return page.collect("musicResponsiveListItemRenderer").mapNotNull { (parseListAny(it) as? BrowseItem.Artist)?.artist }
+    }
+
+    suspend fun like(videoId: String) {
+        requireAccount()
+        call("like/like", auth = true) { putJsonObject("target") { put("videoId", videoId) } }
+    }
+
+    suspend fun removeLike(videoId: String) {
+        requireAccount()
+        call("like/removelike", auth = true) { putJsonObject("target") { put("videoId", videoId) } }
+    }
+
+    /** Makes a private playlist in the account and returns its id. */
+    suspend fun createPlaylist(title: String, videoIds: List<String>): String? {
+        requireAccount()
+        val data = call("playlist/create", auth = true) {
+            put("title", title)
+            put("privacyStatus", "PRIVATE")
+            put("videoIds", kotlinx.serialization.json.JsonArray(videoIds.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        }
+        return data.at("playlistId").str
+    }
+
+    suspend fun addToPlaylist(playlistId: String, videoIds: List<String>) {
+        requireAccount()
+        if (videoIds.isEmpty()) return
+        call("browse/edit_playlist", auth = true) {
+            put("playlistId", playlistId.removePrefix("VL"))
+            put(
+                "actions",
+                kotlinx.serialization.json.JsonArray(
+                    videoIds.map { id ->
+                        buildJsonObject {
+                            put("action", "ACTION_ADD_VIDEO")
+                            put("addedVideoId", id)
+                            put("dedupeOption", "DEDUPE_OPTION_SKIP")
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    /**
+     * Tells YouTube the account played a song, so it shows in YouTube Music's history and
+     * shapes its recommendations. Returns false when YouTube gave no way to report it.
+     */
+    suspend fun addToHistory(videoId: String): Boolean {
+        requireAccount()
+        val data = call("player", auth = true) { put("videoId", videoId) }
+        val url = data.at("playbackTracking", "videostatsPlaybackUrl", "baseUrl").str ?: return false
+        val cpn = (1..16).map { CPN_ALPHABET.random() }.joinToString("")
+        val login = account ?: return false
+        return withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url("$url&ver=2&c=WEB_REMIX&cpn=$cpn")
+                .header("User-Agent", UA)
+                .header("Cookie", login.cookie)
+                .header("Authorization", login.authorization(ORIGIN))
+                .header("X-Goog-AuthUser", "0")
+                .header("X-Origin", ORIGIN)
+                .build()
+            runCatching { http.newCall(request).execute().use { it.isSuccessful } }.getOrDefault(false)
+        }
+    }
+
+    // ---------- podcasts ----------
+
+    /** A show and its episodes, newest first. */
+    suspend fun podcast(browseId: String, maxEpisodes: Int = 200): PodcastPage? {
+        val page = call("browse") { put("browseId", browseId) }
+        val header = page.collect("musicResponsiveHeaderRenderer").firstOrNull() ?: return null
+        val show = PodcastRef(
+            id = browseId,
+            title = runsText(header.at("title")),
+            author = runsText(header.at("straplineTextOne")),
+            coverUrl = bestThumb(header.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr),
+        )
+        val episodes = page.collect("musicMultiRowListItemRenderer").mapNotNull { parseEpisode(it, show) }.toMutableList()
+        var token = continuationToken(page)
+        var pages = 0
+        while (token != null && episodes.size < maxEpisodes && pages++ < MAX_PAGES) {
+            val more = call("browse") { put("continuation", token) }
+            val found = more.collect("musicMultiRowListItemRenderer").mapNotNull { parseEpisode(it, show) }
+            if (found.isEmpty()) break
+            episodes += found
+            token = continuationToken(more)
+        }
+        return PodcastPage(
+            podcast = show,
+            description = runsText(header.collect("musicDescriptionShelfRenderer").firstOrNull().at("description")),
+            episodes = episodes.distinctBy { it.track.videoId },
+        )
+    }
+
+    /** An episode row (musicMultiRowListItemRenderer). [show] is known on a show's own page. */
+    private fun parseEpisode(r: JsonElement?, show: PodcastRef? = null): Episode? {
+        val videoId = r.at("onTap", "watchEndpoint", "videoId").str ?: return null
+        val title = runsText(r.at("title"))
+        if (title.isEmpty()) return null
+        val showRun = r.at("secondTitle", "runs").arr.firstOrNull()
+        val showName = show?.title ?: showRun.at("text").str.orEmpty()
+        val showId = show?.id ?: showRun.at("navigationEndpoint", "browseEndpoint", "browseId").str.orEmpty()
+        val parts = subtitleParts(r.at("subtitle", "runs").arr)
+        val progress = r.at("playbackProgress", "musicPlaybackProgressRenderer")
+        val durationText = subtitleParts(progress.at("durationText", "runs").arr).firstOrNull().orEmpty()
+        val thumbs = r.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr
+        val author = show?.author?.ifEmpty { null } ?: showName
+        return Episode(
+            track = Track(
+                videoId = videoId,
+                title = title,
+                artist = author.ifEmpty { "Podcast" },
+                album = showName,
+                albumId = showId,
+                durationSec = parseSpokenDuration(durationText),
+                coverUrl = thumbs.lastOrNull().at("url").str ?: show?.coverUrl.orEmpty(),
+                kind = Kind.EPISODE,
+                plays = parts.firstOrNull { AUDIENCE_SUFFIX.containsMatchIn(it) }.orEmpty(),
+                year = parts.lastOrNull { !AUDIENCE_SUFFIX.containsMatchIn(it) }.orEmpty(),
+            ),
+            date = parts.lastOrNull { !AUDIENCE_SUFFIX.containsMatchIn(it) }.orEmpty(),
+            description = runsText(r.at("description")),
+        )
+    }
+
+    /** "1 hr 47 min", "52 min", "45 sec" to seconds. */
+    private fun parseSpokenDuration(text: String): Int {
+        var total = 0
+        SPOKEN_DURATION.findAll(text).forEach { m ->
+            val n = m.groupValues[1].toIntOrNull() ?: return@forEach
+            total += when (m.groupValues[2].lowercase().first()) {
+                'h' -> n * 3600
+                'm' -> n * 60
+                else -> n
+            }
+        }
+        return total
+    }
+
+    private fun thumbsOf(r: JsonElement?): List<JsonElement> =
+        r.at("thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr
+            .ifEmpty { r.at("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails").arr }
+
+    /** "Album • Arijit Singh • 2023" as its parts. */
+    private fun subtitleParts(runs: List<JsonElement>): List<String> =
+        runs.joinToString("") { it.at("text").str.orEmpty() }.split(" • ", "•").map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** A tile (musicTwoRowItemRenderer): album, playlist, artist, podcast or a song/video. */
+    private fun parseTwoRow(r: JsonElement?): BrowseItem? {
+        val title = runsText(r.at("title"))
+        if (title.isEmpty()) return null
+        val subRuns = r.at("subtitle", "runs").arr
+        val thumbs = thumbsOf(r)
+        r.at("navigationEndpoint", "watchEndpoint", "videoId").str?.let { videoId ->
+            return BrowseItem.Song(toTrack(videoId, title, parseByline(subRuns), thumbs, videoTypeOf(r)))
+        }
+        val id = r.at("navigationEndpoint", "browseEndpoint", "browseId").str ?: return null
+        return browseItem(id, pageType(r), title, subtitleParts(subRuns), thumbs)
+    }
+
+    /** A list row (musicResponsiveListItemRenderer) that may be a song or a link to an album, playlist, artist or podcast. */
+    private fun parseListAny(r: JsonElement?): BrowseItem? {
+        parseListItem(r)?.let { return BrowseItem.Song(it) }
+        val id = r.at("navigationEndpoint", "browseEndpoint", "browseId").str ?: return null
+        val cols = r.at("flexColumns").arr.map { it.at("musicResponsiveListItemFlexColumnRenderer", "text") }
+        val title = runsText(cols.firstOrNull())
+        if (title.isEmpty()) return null
+        val subRuns = mutableListOf<JsonElement>()
+        cols.drop(1).forEachIndexed { i, c ->
+            if (i > 0) subRuns += BULLET
+            subRuns += c.at("runs").arr
+        }
+        return browseItem(id, pageType(r), title, subtitleParts(subRuns), thumbsOf(r))
+    }
+
+    private fun parseCategory(r: JsonElement?): BrowseItem? {
+        val endpoint = r.at("clickCommand", "browseEndpoint") ?: return null
+        if (endpoint.at("browseId").str != MOODS_CATEGORY) return null
+        return BrowseItem.Mood(
+            Category(
+                title = runsText(r.at("buttonText")),
+                browseId = MOODS_CATEGORY,
+                params = endpoint.at("params").str.orEmpty(),
+                color = r.at("solid", "leftStripeColor").str?.toLongOrNull() ?: 0,
+            ),
+        )
+    }
+
+    private fun browseItem(id: String, type: String?, title: String, parts: List<String>, thumbs: List<JsonElement>): BrowseItem? {
+        val cover = bestThumb(thumbs)
+        return when {
+            type == "MUSIC_PAGE_TYPE_ALBUM" || id.startsWith("MPREb") -> {
+                val rest = parts.filter { it !in ALBUM_TYPES && !YEAR.matches(it) && !AUDIENCE_SUFFIX.containsMatchIn(it) }
+                BrowseItem.Album(
+                    AlbumRef(
+                        id = id,
+                        title = title,
+                        artist = rest.joinToString(", "),
+                        year = parts.firstOrNull { YEAR.matches(it) }.orEmpty(),
+                        coverUrl = cover,
+                        type = parts.firstOrNull { it in ALBUM_TYPES } ?: "Album",
+                    ),
+                )
+            }
+            type == "MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE" || id.startsWith("MPSP") -> {
+                val rest = parts.filter { it != "Podcast" }
+                BrowseItem.Podcast(PodcastRef(id, title, rest.firstOrNull().orEmpty(), cover))
+            }
+            type == "MUSIC_PAGE_TYPE_PLAYLIST" || id.startsWith("VL") -> {
+                val rest = parts.dropWhile { it in PLAYLIST_TYPES }
+                BrowseItem.Playlist(
+                    PlaylistRef(
+                        id = id.removePrefix("VL"),
+                        title = title,
+                        author = rest.firstOrNull { !COUNT.containsMatchIn(it) && !AUDIENCE_SUFFIX.containsMatchIn(it) }.orEmpty(),
+                        coverUrl = cover,
+                        countText = rest.firstOrNull { COUNT.containsMatchIn(it) }.orEmpty(),
+                    ),
+                )
+            }
+            type == "MUSIC_PAGE_TYPE_ARTIST" || type == "MUSIC_PAGE_TYPE_USER_CHANNEL" || id.startsWith("UC") ->
+                BrowseItem.Artist(
+                    ArtistSummary(
+                        id = id,
+                        name = title,
+                        audience = parts.filter { it != "Artist" }.joinToString(" • "),
+                        imageUrl = bigCover(thumbs.lastOrNull().at("url").str, 400),
+                    ),
+                )
+            else -> null
+        }
     }
 
     /** Plain lyrics from YouTube Music (fallback when no synced lyrics exist). */
@@ -352,6 +827,25 @@ class InnerTube(
         const val FILTER_SONGS = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
         const val FILTER_VIDEOS = "EgWKAQIQAWoKEAkQBRAKEAMQBA%3D%3D"
         const val FILTER_ARTISTS = "EgWKAQIgAWoKEAkQBRAKEAMQBA%3D%3D"
+        const val FILTER_ALBUMS = "EgWKAQIYAWoKEAkQBRAKEAMQBA%3D%3D"
+        const val FILTER_PODCASTS = "EgWKAQJQAWoKEAkQBRAKEAMQBA%3D%3D"
+        const val FILTER_EPISODES = "EgWKAQJIAWoKEAkQBRAKEAMQBA%3D%3D"
+        const val FILTER_FEATURED_PLAYLISTS = "EgeKAQQoADgBagoQAxAEEAkQChAF"
+        const val FILTER_COMMUNITY_PLAYLISTS = "EgeKAQQoAEABagoQAxAEEAkQChAF"
+
+        const val EXPLORE = "FEmusic_explore"
+        const val CHARTS = "FEmusic_charts"
+        const val MOODS_AND_GENRES = "FEmusic_moods_and_genres"
+        const val NEW_RELEASES = "FEmusic_new_releases"
+        const val PODCASTS = "FEmusic_podcasts"
+        private const val CPN_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        private val SPOKEN_DURATION = Regex("""(\d+)\s*(hr|hour|min|sec|h|m|s)""", RegexOption.IGNORE_CASE)
+        private const val MOODS_CATEGORY = "FEmusic_moods_and_genres_category"
+        private const val MAX_PAGES = 20
+        private val SHELF_KEYS = setOf("musicCarouselShelfRenderer", "gridRenderer")
+        private val ALBUM_TYPES = setOf("Album", "Single", "EP")
+        private val PLAYLIST_TYPES = setOf("Playlist", "Chart", "Mix")
+        private val COUNT = Regex("""^\d[\d,.]*\s*(songs?|tracks?|episodes?|videos?)$""", RegexOption.IGNORE_CASE)
 
         private val BULLET: JsonElement = buildJsonObject { put("text", " • ") }
         private val ITEM_TYPES = setOf("Song", "Video", "Artist", "Album", "Single", "EP")
