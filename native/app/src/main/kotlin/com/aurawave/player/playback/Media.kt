@@ -25,9 +25,35 @@ private const val EXTRA_ALBUM_ID = "albumId"
 
 fun trackUri(videoId: String): Uri = Uri.parse("$TRACK_SCHEME://track/$videoId")
 
+/**
+ * A song's address with its name on it. When YouTube cannot play the song, the name is
+ * what lets the player look for the same recording elsewhere (see [StreamUrlCache]).
+ * Only catalogue songs carry it: a video, an upload or an episode has no twin to look for.
+ */
+fun trackUri(track: Track): Uri {
+    if (track.kind != Kind.SONG || track.title.isEmpty()) return trackUri(track.videoId)
+    return trackUri(track.videoId).buildUpon()
+        .appendQueryParameter(HINT_TITLE, track.title)
+        .appendQueryParameter(HINT_ARTIST, track.artist)
+        .appendQueryParameter(HINT_DURATION, track.durationSec.toString())
+        .build()
+}
+
+/** What is known about a song besides its id: enough to find the same recording in another catalogue. */
+data class SongHint(val title: String, val artist: String, val durationSec: Int)
+
+fun songHint(uri: Uri): SongHint? {
+    val title = uri.getQueryParameter(HINT_TITLE)?.takeIf { it.isNotEmpty() } ?: return null
+    return SongHint(title, uri.getQueryParameter(HINT_ARTIST).orEmpty(), uri.getQueryParameter(HINT_DURATION)?.toIntOrNull() ?: 0)
+}
+
+private const val HINT_TITLE = "title"
+private const val HINT_ARTIST = "artist"
+private const val HINT_DURATION = "duration"
+
 fun Track.toMediaItem(): MediaItem = MediaItem.Builder()
     .setMediaId(videoId)
-    .setUri(trackUri(videoId))
+    .setUri(trackUri(this))
     // Cached audio is filed under the video id, so it survives the stream URL changing.
     .setCustomCacheKey(videoId)
     .setMediaMetadata(
@@ -53,7 +79,7 @@ fun Track.toMediaItem(): MediaItem = MediaItem.Builder()
 
 /** Items arriving from a controller carry no URI (it is not sent across); give them the track URI back. */
 fun MediaItem.withStreamUri(): MediaItem =
-    buildUpon().setUri(trackUri(mediaId)).setCustomCacheKey(mediaId).build()
+    buildUpon().setUri(trackUri(toTrack())).setCustomCacheKey(mediaId).build()
 
 fun MediaItem.toTrack(): Track {
     val meta = mediaMetadata

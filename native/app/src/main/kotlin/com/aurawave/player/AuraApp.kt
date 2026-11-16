@@ -10,6 +10,8 @@ import androidx.media3.datasource.cache.SimpleCache
 import com.aurawave.innertube.InnerTube
 import com.aurawave.innertube.StreamResolver
 import com.aurawave.innertube.AudioQuality
+import com.aurawave.innertube.BackupStreams
+import com.aurawave.innertube.JioSaavn
 import com.aurawave.innertube.Loudness
 import com.aurawave.player.playback.SoundState
 import com.aurawave.player.playback.Downloads
@@ -83,7 +85,7 @@ class AppGraph(context: Context) {
 
     /** Audio-only stream URLs, resolved on this device and reused until they expire. */
     private val resolver = StreamResolver(http)
-    val streamUrls = StreamUrlCache(resolver) { qualityNow(context) }
+    val streamUrls = StreamUrlCache(resolver, BackupStreams(http), JioSaavn(http), { settings.saavnFallback.value }) { qualityNow(context) }
 
     /** A video-only stream for the Song/Video switch: up to 720p on Wi-Fi, 480p on mobile data. */
     suspend fun videoUrl(videoId: String): String? = kotlinx.coroutines.withContext(Dispatchers.IO) {

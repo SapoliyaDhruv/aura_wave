@@ -61,6 +61,14 @@ YouTube changes how streams are served every few months. Check, in this order:
 - **The search / radio tests fail**: YouTube Music changed its response shape. The parsing is in
   `innertube/src/main/kotlin/com/aurawave/innertube/InnerTube.kt`.
 
+- **`LiveFallbackTest` fails**: JioSaavn changed its search or its stream addresses
+  (`JioSaavn.kt`). The backup YouTube route is allowed to decline, and usually does: YouTube
+  serves only the first megabyte of those streams on most networks.
+
+When the usual route cannot play a song, the player tries the backup YouTube route, then
+JioSaavn for the same recording (`StreamUrlCache` in `playback/StreamDataSource.kt`). The player
+shows "Playing from JioSaavn" when that happens, and Settings has a switch to turn it off.
+
 Plain `./gradlew :innertube:test` runs only the offline tests. `./gradlew :app:testDebugUnitTest`
 checks the backup file format and the rules of the liked-songs sync.
 
@@ -79,6 +87,8 @@ innertube/   Plain Kotlin, no Android. Runs and is tested on the desktop.
   StreamResolver.kt   video id -> audio-only stream URL (via NewPipeExtractor)
   Match.kt            "is this the recording the listener asked for?" Ported from shared/match.js;
                       MatchParityTest checks it against that file's answers.
+  BackupStreams.kt    a second way to get a stream from YouTube; accepts only one that plays to the end
+  JioSaavn.kt         the same recording from JioSaavn, when YouTube cannot play a song
   Spotify.kt          public Spotify playlists, read on the phone
   Loudness.kt         each song's measured loudness, for volume levelling
   Account.kt          the optional YouTube Music login (cookies + SAPISIDHASH)

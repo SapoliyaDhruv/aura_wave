@@ -16,6 +16,12 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import com.aurawave.innertube.AudioQuality
 import com.aurawave.innertube.AudioSource
+import com.aurawave.innertube.BackupStreams
+import com.aurawave.innertube.JioSaavn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import com.aurawave.innertube.StreamResolver
 import com.aurawave.innertube.UnplayableException
 import com.aurawave.player.AppGraph
@@ -27,7 +33,15 @@ import java.util.concurrent.ConcurrentHashMap
  * Stream URLs by video id. A URL is reused until shortly before it expires; a song
  * that cannot be streamed is remembered briefly so retries don't hammer YouTube.
  */
-class StreamUrlCache(private val resolver: StreamResolver, private val qualityNow: () -> AudioQuality) {
+class StreamUrlCache(
+    private val resolver: StreamResolver,
+    /** A second way to get the stream from YouTube, tried when [resolver] cannot. */
+    private val backup: BackupStreams,
+    /** A second catalogue, tried last, when YouTube cannot play the song at all. */
+    private val saavn: JioSaavn,
+    private val useSaavn: () -> Boolean,
+    private val qualityNow: () -> AudioQuality,
+) {
     private class Failure(val error: UnplayableException, val at: Long)
 
     private val sources = ConcurrentHashMap<String, AudioSource>()
@@ -58,19 +72,24 @@ class StreamUrlCache(private val resolver: StreamResolver, private val qualityNo
         chosen[videoId] = quality
     }
 
+    private val origins = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** Songs playing from somewhere other than the usual route, by video id, and where from ("JioSaavn"). */
+    val playingFrom: StateFlow<Map<String, String>> = origins.asStateFlow()
+
     /** Blocking. Throws [UnplayableException] when the song cannot be streamed, or IOException when YouTube cannot be reached. */
     @Throws(IOException::class)
-    fun get(videoId: String): AudioSource = lookUp(videoId, qualityFor(videoId))
+    fun get(videoId: String, hint: SongHint? = null): AudioSource = lookUp(videoId, qualityFor(videoId), hint)
 
     /**
      * Looks up the next song's address ahead of time without deciding its quality or source:
      * that is decided when it is opened (it may be downloaded, or cached in another quality).
      */
-    fun prefetch(videoId: String) {
-        lookUp(videoId, chosen[videoId] ?: qualityNow())
+    fun prefetch(videoId: String, hint: SongHint? = null) {
+        lookUp(videoId, chosen[videoId] ?: qualityNow(), hint)
     }
 
-    private fun lookUp(videoId: String, quality: AudioQuality): AudioSource {
+    private fun lookUp(videoId: String, quality: AudioQuality, hint: SongHint?): AudioSource {
         val key = "$videoId/${quality.name}"
         sources[key]?.takeIf { it.isFresh() }?.let { return it }
         // One lookup per song at a time: the player and its look-ahead may ask together.
@@ -78,7 +97,11 @@ class StreamUrlCache(private val resolver: StreamResolver, private val qualityNo
             sources[key]?.takeIf { it.isFresh() }?.let { return it }
             failures[videoId]?.takeIf { System.currentTimeMillis() - it.at < FAILURE_MEMORY_MS }?.let { throw it.error }
             try {
-                val source = resolver.resolve(videoId, quality)
+                val source = try {
+                    resolver.resolve(videoId, quality)
+                } catch (e: UnplayableException) {
+                    elsewhere(videoId, quality, hint) ?: throw e
+                }
                 sources[key] = source
                 failures.remove(videoId)
                 return source
@@ -87,6 +110,28 @@ class StreamUrlCache(private val resolver: StreamResolver, private val qualityNo
                 throw e
             }
         }
+    }
+
+    /**
+     * The usual route could not play the song. Try YouTube a second way; then, for a song
+     * whose name is known, the same recording on JioSaavn. Null when neither has it.
+     */
+    private fun elsewhere(videoId: String, quality: AudioQuality, hint: SongHint?): AudioSource? {
+        try {
+            return backup.resolve(videoId, quality).also { note(videoId, null) }
+        } catch (_: IOException) {
+            // Declined, or unreachable: carry on to the next place.
+        }
+        if (hint == null || !useSaavn()) return null
+        return try {
+            saavn.find(videoId, hint.title, hint.artist, hint.durationSec, quality)?.also { note(videoId, "JioSaavn") }
+        } catch (_: IOException) {
+            null
+        }
+    }
+
+    private fun note(videoId: String, origin: String?) {
+        origins.update { if (origin == null) it - videoId else it + (videoId to origin) }
     }
 
     /** Forget a URL that YouTube refused, so the next attempt asks for a new one. */
@@ -149,7 +194,7 @@ class StreamDataSource(
         val key = cacheKey(videoId, urls.qualityFor(videoId))
 
         val source = try {
-            urls.get(videoId)
+            urls.get(videoId, songHint(uri))
         } catch (e: UnplayableException) {
             throw e
         } catch (e: IOException) {

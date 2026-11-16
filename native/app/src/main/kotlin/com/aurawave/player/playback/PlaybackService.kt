@@ -442,8 +442,9 @@ class PlaybackService : MediaLibraryService() {
 
     /** Looks up the next song's stream address now, so the change of song has no gap. */
     private fun prefetchNext() {
-        val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let { player.getMediaItemAt(it).mediaId } ?: return
-        scope.launch(Dispatchers.IO) { runCatching { graph.streamUrls.prefetch(next) } }
+        val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let { player.getMediaItemAt(it) } ?: return
+        val hint = next.localConfiguration?.uri?.let(::songHint)
+        scope.launch(Dispatchers.IO) { runCatching { graph.streamUrls.prefetch(next.mediaId, hint) } }
     }
 
     // ---------- remembering the queue ----------

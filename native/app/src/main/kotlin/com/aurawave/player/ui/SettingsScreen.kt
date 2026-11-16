@@ -102,6 +102,14 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
                 onChange = { settings.autoplay.value = it },
             )
 
+            val saavn by settings.saavnFallback.flow.collectAsStateWithLifecycle()
+            SwitchSetting(
+                title = "Try JioSaavn when YouTube can't play a song",
+                body = "Looks for the same recording in JioSaavn's catalogue. It is not an official service for apps, so it may stop working.",
+                checked = saavn,
+                onChange = { settings.saavnFallback.value = it },
+            )
+
             SettingsGroup("Streaming quality")
             Text(
                 "Higher quality sounds better and uses more data. Songs already played or downloaded play from the phone either way.",

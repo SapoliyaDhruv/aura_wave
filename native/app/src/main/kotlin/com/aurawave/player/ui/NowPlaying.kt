@@ -69,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -108,6 +109,8 @@ fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> U
     var queueOpen by remember { mutableStateOf(false) }
     var optionsOpen by remember { mutableStateOf(false) }
     val sleepLabel = rememberSleepLabel(sleepTimer)
+    val playingFrom by graph.streamUrls.playingFrom.collectAsStateWithLifecycle()
+    val origin = playingFrom[item.mediaId]
     var lyricsOpen by rememberSaveable { mutableStateOf(false) }
     val library = LocalLibrary.current
     val liked = item.mediaId in LocalLikedIds.current
@@ -173,7 +176,7 @@ fun NowPlayingScreen(graph: AppGraph, player: PlayerConnection, onClose: () -> U
                 Row(Modifier.fillMaxWidth().then(dragToClose).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose) { Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Close player", modifier = Modifier.size(30.dp)) }
                     Text(
-                        sleepLabel ?: "Now playing",
+                        sleepLabel ?: origin?.let { "Playing from $it" } ?: "Now playing",
                         style = MaterialTheme.typography.labelLarge,
                         color = if (sleepLabel != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
