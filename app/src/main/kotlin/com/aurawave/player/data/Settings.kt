@@ -13,9 +13,6 @@ import kotlinx.coroutines.flow.asStateFlow
 class Settings(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    /** When signed in to YouTube Music: add what is played here to YouTube Music's history. */
-    val sendHistory = BoolPref("send_history", true)
-
     /** Keep playing similar songs when the queue runs out. */
     val autoplay = BoolPref("autoplay", true)
 
@@ -31,12 +28,21 @@ class Settings(context: Context) {
     val themeBackdrop = StringPref("theme_backdrop", "Dusk")
     /** Where the accent colour comes from: "Cover" for the playing song's cover, or the name of a fixed colour. */
     val themeAccent = StringPref("theme_accent", "Cover")
-    /** Swiping a song in a list queues it (right) or likes it (left). Off by default: sideways swipes move between tabs. */
+    /** Swiping a song in a list queues it (right) or likes it (left). */
     val swipeSongs = BoolPref("swipe_songs", false)
-    /** The tabs along the top, by name, in the listener's order; the first is where the app opens. Empty: the default order. */
-    val tabOrder = ListPref("tab_order")
-    /** The tab the app opens on, by name. */
-    val openTab = StringPref("open_tab", "Home")
+
+    // ---------- the automatic backup ----------
+
+    /** Keep a copy of the library in Documents/AuraWave, outside the app, so it outlives an uninstall. */
+    val autoBackup = BoolPref("auto_backup", true)
+    /** Where that copy is written: a file this install made, or the one picked when restoring. Empty until the first save. */
+    val autoBackupUri = StringPref("auto_backup_uri", "")
+    /** When it was last written, in milliseconds; 0 for never. */
+    val autoBackupAt = LongPref("auto_backup_at", 0L)
+    /** A fingerprint of what was last written, so an unchanged library is not written again. */
+    val autoBackupHash = IntPref("auto_backup_hash", 0)
+    /** The offer to restore from a backup has been made (or was not needed), on this install. */
+    val restoreOffered = BoolPref("restore_offered", false)
 
     // ---------- where the listener left off ----------
 
@@ -106,6 +112,12 @@ class Settings(context: Context) {
     inner class IntPref(key: String, default: Int) : Pref<Int>(key, prefs.getInt(key, default)) {
         override fun write(editor: SharedPreferences.Editor, v: Int) {
             editor.putInt(key, v)
+        }
+    }
+
+    inner class LongPref(key: String, default: Long) : Pref<Long>(key, prefs.getLong(key, default)) {
+        override fun write(editor: SharedPreferences.Editor, v: Long) {
+            editor.putLong(key, v)
         }
     }
 

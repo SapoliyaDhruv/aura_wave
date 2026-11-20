@@ -28,7 +28,6 @@ import com.aurawave.player.data.ListenLog
 import com.aurawave.player.data.LyricsStore
 import com.aurawave.player.data.Settings
 import com.aurawave.player.data.Backup
-import com.aurawave.player.data.Account
 import com.aurawave.player.data.PlaylistImporter
 import com.aurawave.player.data.Recommender
 import com.aurawave.innertube.Spotify
@@ -38,6 +37,7 @@ import com.aurawave.player.data.db.AuraDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import com.aurawave.player.playback.StreamUrlCache
 import okhttp3.OkHttpClient
 import java.io.File
@@ -51,6 +51,21 @@ class AuraApp : Application() {
         super.onCreate()
         graph = AppGraph(this)
         Palette.backdrop = Backdrop.named(graph.settings.themeBackdrop.value)
+        forgetSignIn()
+    }
+
+    /**
+     * Version 3.3 has no YouTube Music sign-in. A login kept by an earlier version (its
+     * cookies, and the sign-in page's own storage) is deleted from the phone.
+     */
+    private fun forgetSignIn() {
+        val leftovers = listOf(File(filesDir, "account_remote_likes.txt"), File(dataDir, "app_webview"), File(cacheDir, "WebView"))
+        val signedIn = File(dataDir, "shared_prefs/account.xml").exists()
+        if (!signedIn && leftovers.none { it.exists() }) return
+        graph.scope.launch(Dispatchers.IO) {
+            deleteSharedPreferences("account")
+            leftovers.forEach { it.deleteRecursively() }
+        }
     }
 }
 
@@ -80,7 +95,6 @@ class AppGraph(context: Context) {
     val backup = Backup(context, library, catalog, settings, scope)
     val importer = PlaylistImporter(library, catalog, Spotify(http), scope)
     val recommender = Recommender(context, library, catalog, settings, scope)
-    val account = Account(context, tube, library, settings, scope)
     val updates = Updates(context, http, settings, scope)
 
     val sleepTimer = SleepTimer()

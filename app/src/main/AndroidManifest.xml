@@ -18,9 +18,11 @@
         </intent>
     </queries>
 
+    <!-- hasFragileUserData: Android's uninstall dialog offers to keep the app's data, so a reinstall picks up where it was. -->
     <application
         android:name=".AuraApp"
         android:allowBackup="true"
+        android:hasFragileUserData="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:enableOnBackInvokedCallback="true"

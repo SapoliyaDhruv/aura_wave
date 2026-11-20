@@ -67,9 +67,9 @@ import com.aurawave.player.playback.PlayerConnection
 
 
 /**
- * The tab the app opens on. It answers one question, where did I leave off: the playlist or
- * album last played from, a podcast episode part-way through, and the songs played lately.
- * Everything new and suggested is one swipe to the right, in Discover.
+ * The tab the app opens on. First, where the listener left off: the playlist or album last
+ * played from, a podcast episode part-way through, and the songs played lately. Below that,
+ * what is new: the day's mix, the mixes made for the listener, and songs to try.
  */
 @Composable
 fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Unit, onOpenLiked: () -> Unit, onOpenHistory: () -> Unit) {
@@ -84,19 +84,44 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
     }.collectAsStateWithLifecycle(initialValue = playlistId == null)
     val recent by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
     val unfinished by graph.library.inProgress.collectAsStateWithLifecycle(initialValue = emptyList())
+    val feed by graph.recommender.feed.collectAsStateWithLifecycle()
+    val building by graph.recommender.building.collectAsStateWithLifecycle()
+    val offline by graph.recommender.offline.collectAsStateWithLifecycle()
+    var local by remember { mutableStateOf<LocalShelves?>(null) }
     val actions = LocalSongActions.current
 
+    // The feed is kept on the phone and rebuilt only when it is old, so opening Home costs nothing.
+    LaunchedEffect(Unit) { graph.recommender.refresh() }
+    LaunchedEffect(recent?.firstOrNull()?.videoId) { local = graph.recommender.localShelves() }
+
     val recentList = recent ?: return // still reading the library: draw nothing rather than flash the empty state
-    if (recentList.isEmpty() && lastPlayed == null && unfinished.isEmpty()) {
-        MessageBox(
-            title = "Start with a song you love",
-            body = "Search for a song, an artist, or a line of the lyrics. What you play is kept here, so you can carry on later.",
-            action = "Search music",
-            onAction = onOpenSearch,
-        )
+    val f = feed
+    if (recentList.isEmpty() && lastPlayed == null && unfinished.isEmpty() && f == null) {
+        if (building) {
+            LoadingBox()
+        } else {
+            MessageBox(
+                title = "Start with a song you love",
+                body = "Search for a song, an artist, or a line of the lyrics. What you play is kept here, so you can carry on later.",
+                action = "Search music",
+                onAction = onOpenSearch,
+            )
+        }
         return
     }
     val shown = recentList.take(RECENT_SHOWN)
+
+    // Every mix in one row: the ones built from radio, and the ones from the listener's own history.
+    val made = buildList {
+        if (f != null) {
+            addAll(f.mixes)
+            if (f.becauseSeed != null && f.because.isNotEmpty()) {
+                add(Mix("because", "Because you played ${shortTitle(f.becauseSeed.title)}", "Often played after it", f.because))
+            }
+        }
+        local?.onRepeat?.takeIf { it.size >= 3 }?.let { add(Mix("on-repeat", "On repeat", "What you keep coming back to", it)) }
+        local?.rediscover?.takeIf { it.size >= 3 }?.let { add(Mix("rediscover", "Rediscover", "Loved a while ago", it)) }
+    }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = listEnd())) {
         lastPlayed?.takeIf { playlistExists }?.let { source ->
@@ -126,51 +151,7 @@ fun HomeScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Un
                 )
             }
         }
-    }
-}
-
-/**
- * Online, one swipe to the right of Home: the day's mix, the mixes made for the listener,
- * and new songs to try.
- */
-@Composable
-fun DiscoverScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -> Unit) {
-    val recent by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
-    val feed by graph.recommender.feed.collectAsStateWithLifecycle()
-    val building by graph.recommender.building.collectAsStateWithLifecycle()
-    val offline by graph.recommender.offline.collectAsStateWithLifecycle()
-    var local by remember { mutableStateOf<LocalShelves?>(null) }
-    val actions = LocalSongActions.current
-
-    LaunchedEffect(Unit) { graph.recommender.refresh() }
-    LaunchedEffect(recent?.firstOrNull()?.videoId) { local = graph.recommender.localShelves() }
-
-    val f = feed
-    if (f == null) {
-        when {
-            building -> LoadingBox()
-            else -> MessageBox(
-                title = if (offline) "Suggestions need a connection" else "Suggestions grow as you listen",
-                body = if (offline) "Try again when you're online." else "Play a few songs you love and mixes made for you appear here.",
-                action = if (offline) "Try again" else "Search music",
-                onAction = if (offline) ({ graph.recommender.refresh(force = true) }) else onOpenSearch,
-            )
-        }
-        return
-    }
-
-    // Every mix in one row: the ones built from radio, and the ones from the listener's own history.
-    val made = buildList {
-        addAll(f.mixes)
-        if (f.becauseSeed != null && f.because.isNotEmpty()) {
-            add(Mix("because", "Because you played ${shortTitle(f.becauseSeed.title)}", "Often played after it", f.because))
-        }
-        local?.onRepeat?.takeIf { it.size >= 3 }?.let { add(Mix("on-repeat", "On repeat", "What you keep coming back to", it)) }
-        local?.rediscover?.takeIf { it.size >= 3 }?.let { add(Mix("rediscover", "Rediscover", "Loved a while ago", it)) }
-    }
-
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = listEnd())) {
-        f.hero?.let { hero -> item(key = "hero") { HeroCard(hero, player) } }
+        f?.hero?.let { hero -> item(key = "hero") { HeroCard(hero, player) } }
         if (made.isNotEmpty()) {
             item(key = "made-header") {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -185,8 +166,8 @@ fun DiscoverScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -
             }
         }
         // A few as a taste; the whole list, with its reasons and "Not interested", is behind See all.
-        if (f.freshFinds.isNotEmpty()) {
-            val fresh = f.freshFinds
+        val fresh = f?.freshFinds.orEmpty()
+        if (fresh.isNotEmpty()) {
             item(key = "fresh-header") {
                 ShelfHeader(
                     "Fresh finds",
@@ -196,6 +177,19 @@ fun DiscoverScreen(graph: AppGraph, player: PlayerConnection, onOpenSearch: () -
                 )
             }
             pickRows(fresh.take(FRESH_SHOWN), graph, player)
+        }
+        if (f == null && offline && !building) {
+            item(key = "offline") {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Suggestions need a connection",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    RefreshButton(false) { graph.recommender.refresh(force = true) }
+                }
+            }
         }
     }
 }
@@ -303,7 +297,7 @@ private fun ContinueEpisode(episode: Track, fraction: Float, player: PlayerConne
     }
 }
 
-private const val RECENT_SHOWN = 8
+private const val RECENT_SHOWN = 5
 private const val FRESH_SHOWN = 5
 
 /** The day's main mix, large, with its covers and play buttons. */

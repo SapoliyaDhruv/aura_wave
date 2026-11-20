@@ -75,6 +75,8 @@ class PlaybackService : MediaLibraryService() {
     /** The episode playing, so it can be marked played when it runs to its end. */
     private var episodePlaying: com.aurawave.innertube.Track? = null
     private var placeJob: Job? = null
+    /** Waits to shut the service down once the player has fallen silent; see [restWhenSilent]. */
+    private var resting: Job? = null
 
     /** What the player is on, to tell a new song from the same song changing its recording. */
     private var playing: MediaItem? = null
@@ -145,7 +147,46 @@ class PlaybackService : MediaLibraryService() {
         return result
     }
 
+    /** Swiping the app away from recent apps ends the service too, unless music is playing. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (isSilent()) {
+            savePlace()
+            pauseAllPlayersAndStopSelf()
+        }
+    }
+
+    private fun isSilent() = !player.playWhenReady || player.mediaItemCount == 0 ||
+        player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED
+
+    /** True while one of the app's own screens is connected (not the notification, a widget passing by, or a car). */
+    private fun aScreenIsOpen(): Boolean {
+        val session = session ?: return false
+        return session.connectedControllers.any { it.packageName == packageName && !session.isMediaNotificationController(it) }
+    }
+
+    /**
+     * Nothing keeps running that is not in use. Once the player falls silent and no screen of
+     * the app is open, the service shuts down, and with it the app: a few seconds after the
+     * music is stopped, and after ten minutes of a pause, during which the notification stays
+     * so the listener can pick up again. The queue and the place in the song are saved, so
+     * the app, a headset button or the widget carries on from there later.
+     */
+    private fun restWhenSilent() {
+        resting?.cancel()
+        if (!isSilent()) return
+        val stopped = player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED
+        resting = scope.launch {
+            delay(if (stopped) STOPPED_KEEP_MS else PAUSED_KEEP_MS)
+            if (isSilent() && !aScreenIsOpen()) {
+                if (songsJob?.isActive == true) writeSongs()
+                savePlace()
+                pauseAllPlayersAndStopSelf()
+            }
+        }
+    }
+
     override fun onDestroy() {
+        resting?.cancel()
         if (songsJob?.isActive == true) writeSongs() // a queue change still waiting to be written
         savePlace()
         graph.sleepTimer.cancel()
@@ -162,6 +203,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private val sessionCallback = object : MediaLibrarySession.Callback {
+        /** A screen of the app has closed: if nothing is playing, there may be nothing left to stay up for. */
+        override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) = restWhenSilent()
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -375,6 +419,7 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             crossfader.playWhenReadyChanged(playWhenReady)
+            restWhenSilent()
             // The sleep timer's "end of song" pause has happened.
             if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM && graph.sleepTimer.sleep.value != null) {
                 graph.sleepTimer.set(null)
@@ -387,6 +432,7 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY) consecutiveFailures = 0
+            restWhenSilent()
         }
 
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
@@ -623,5 +669,9 @@ class PlaybackService : MediaLibraryService() {
         const val PLACE_SAVE_INTERVAL_MS = 10_000L
         const val QUEUE_SAVE_DELAY_MS = 800L
         const val FADE_STEP_MS = 200L
+        /** How long a paused player is kept, with its notification, before the service shuts down. */
+        const val PAUSED_KEEP_MS = 10 * 60_000L
+        /** How long after the music is stopped (the notification cleared) the service shuts down. */
+        const val STOPPED_KEEP_MS = 4_000L
     }
 }

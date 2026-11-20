@@ -1,7 +1,13 @@
 package com.aurawave.player.data
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.DocumentsContract
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import com.aurawave.innertube.AlbumRef
 import com.aurawave.innertube.Kind
 import com.aurawave.player.data.db.FollowedArtistRow
@@ -90,8 +96,14 @@ class Backup(
     // ---------- export ----------
 
     suspend fun export(uri: Uri) = withContext(Dispatchers.IO) {
-        val file = BackupFile(
-            exportedAt = Instant.now().toString(),
+        val text = json.encodeToString(BackupFile.serializer(), snapshot().copy(exportedAt = Instant.now().toString()))
+        val out = context.contentResolver.openOutputStream(uri, "wt") ?: error("Could not open the file for writing")
+        out.bufferedWriter().use { it.write(text) }
+    }
+
+    /** The whole library as a backup, without the time it was taken. */
+    private suspend fun snapshot(): BackupFile = withContext(Dispatchers.IO) {
+        BackupFile(
             songs = dao.allSongs().map(SongRow::toTrack),
             liked = dao.allLikes().map { BackupLike(it.videoId, it.likedAt) },
             playlists = dao.allPlaylists().map { p ->
@@ -108,13 +120,92 @@ class Backup(
             followedPodcasts = dao.allFollowedPodcasts().map { PodcastRef(it.id, it.title, it.author, it.coverUrl) },
             episodeProgress = dao.allProgressNow().map { BackupProgress(it.videoId, it.podcastId, it.positionMs, it.durationMs, it.played) },
         )
-        val out = context.contentResolver.openOutputStream(uri, "wt") ?: error("Could not open the file for writing")
-        out.bufferedWriter().use { it.write(json.encodeToString(BackupFile.serializer(), file)) }
     }
+
+    // ---------- the automatic copy ----------
+
+    private val saving = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * Keeps a copy of the library in Documents/AuraWave, outside the app's own storage, so
+     * it is still there after the app is uninstalled. Called when the app is left; written
+     * only when the library has changed since the last copy, and never for an empty
+     * library, so a fresh install cannot replace a good backup with nothing.
+     * Returns true when the copy is up to date.
+     */
+    suspend fun autoSave(): Boolean = saving.withLockSafe {
+        if (!settings.autoBackup.value || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@withLockSafe false
+        val file = snapshot()
+        if (file.isEmptyLibrary()) return@withLockSafe false
+        val body = json.encodeToString(BackupFile.serializer(), file)
+        val hash = body.hashCode()
+        if (hash == settings.autoBackupHash.value && settings.autoBackupUri.value.isNotEmpty()) return@withLockSafe true
+        val text = json.encodeToString(BackupFile.serializer(), file.copy(exportedAt = Instant.now().toString()))
+        val written = withContext(Dispatchers.IO) {
+            writeTo(settings.autoBackupUri.value.takeIf { it.isNotEmpty() }?.let(Uri::parse), text)
+                ?: newBackupFile()?.let { writeTo(it, text) }
+        } ?: return@withLockSafe false
+        settings.autoBackupUri.value = written.toString()
+        settings.autoBackupHash.value = hash
+        settings.autoBackupAt.value = System.currentTimeMillis()
+        true
+    }
+
+    /** Writes [text] over the file at [uri]; null when there is no such file or it cannot be written. */
+    private fun writeTo(uri: Uri?, text: String): Uri? {
+        uri ?: return null
+        return try {
+            val out = context.contentResolver.openOutputStream(uri, "wt") ?: return null
+            out.bufferedWriter().use { it.write(text) }
+            uri
+        } catch (e: Exception) {
+            null // deleted, moved, or no longer ours to write
+        }
+    }
+
+    /**
+     * A new file in Documents/AuraWave. A file of the same name left by an earlier install
+     * is not this install's to change, so Android names the new one "AuraWave backup (1)";
+     * the old one stays as it was.
+     */
+    private fun newBackupFile(): Uri? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, AUTO_FILE_NAME)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, AUTO_FOLDER)
+        }
+        return runCatching { context.contentResolver.insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) }.getOrNull()
+    }
+
+    /**
+     * A backup file the listener picked to restore from. When Android lets the app keep
+     * writing to it, it becomes the automatic copy, so a reinstalled app goes on updating
+     * the same file instead of starting a second one beside it.
+     */
+    private fun adopt(uri: Uri) {
+        val resolver = context.contentResolver
+        val name = runCatching {
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull().orEmpty()
+        // Only the automatic copy itself; a dated backup saved by hand is left as it is.
+        if (!name.startsWith(AUTO_FILE_NAME.substringBefore('.'))) return
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val kept = runCatching { resolver.takePersistableUriPermission(uri, flags) }.isSuccess
+        if (kept) {
+            settings.autoBackupUri.value = uri.toString()
+            settings.autoBackupHash.value = 0
+        }
+    }
+
+    /** Where the automatic copy is kept, for the folder picker to open on. */
+    val autoFolderUri: Uri
+        get() = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + AUTO_FOLDER.trimEnd('/'))
 
     // ---------- restore ----------
 
-    fun restore(uri: Uri) {
+    /** [fromAutoCopy]: picked from the welcome offer; if it is the automatic copy, keep updating it afterwards. */
+    fun restore(uri: Uri, fromAutoCopy: Boolean = false) {
         if (state.value is Progress.Working) return
         state.value = Progress.Working("Reading the backup")
         scope.launch {
@@ -129,7 +220,10 @@ class Backup(
                 } catch (_: IllegalArgumentException) {
                     throw BackupException("That file is not an AuraWave backup.")
                 }
-                Progress.Done(restore(root))
+                val report = restore(root)
+                if (fromAutoCopy && backupKind(root) == BackupKind.NATIVE) adopt(uri)
+                autoSave() // the restored library is the one worth keeping now
+                Progress.Done(report)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: BackupException) {
@@ -399,8 +493,23 @@ class Backup(
         const val MAX_ESTIMATED_PLAYS = 200
         val VIDEO_ID = Regex("[A-Za-z0-9_-]{11}")
         val OLD_DEMO_COVER = Regex("unsplash|pixabay|/covers/")
+        const val AUTO_FOLDER = "Documents/AuraWave/"
+        const val AUTO_FILE_NAME = "AuraWave backup.json"
     }
 }
+
+/** Runs [block] under the lock; a failure of any kind counts as "not saved". */
+private suspend fun kotlinx.coroutines.sync.Mutex.withLockSafe(block: suspend () -> Boolean): Boolean = try {
+    lock()
+    try { block() } finally { unlock() }
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    false
+}
+
+private fun BackupFile.isEmptyLibrary() =
+    liked.isEmpty() && playlists.isEmpty() && plays.isEmpty() && savedAlbums.isEmpty() && followedArtists.isEmpty() && followedPodcasts.isEmpty()
 
 // ---------- the file ----------
 

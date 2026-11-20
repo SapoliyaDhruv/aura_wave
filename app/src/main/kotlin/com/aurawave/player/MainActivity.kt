@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import com.aurawave.player.playback.PlayerConnection
 import com.aurawave.player.ui.AppRoot
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var player: PlayerConnection
@@ -45,6 +46,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         player.disconnect()
+        // Leaving the app: bring the backup in Documents/AuraWave up to date, if anything changed.
+        val graph = (application as AuraApp).graph
+        graph.scope.launch { graph.backup.autoSave() }
         super.onStop()
     }
 }

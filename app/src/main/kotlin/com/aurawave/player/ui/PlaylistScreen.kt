@@ -100,15 +100,6 @@ fun PlaylistScreen(graph: AppGraph, player: PlayerConnection, id: Long, onBack: 
                                 actions.say("Added ${songCount(songs.orEmpty().size)} to the queue")
                             })
                         }
-                        if (graph.account.signedIn && playlist?.source != com.aurawave.player.data.Account.SOURCE) {
-                            DropdownMenuItem(text = { Text("Copy to YouTube Music") }, onClick = {
-                                menuOpen = false
-                                scope.launch {
-                                    val problem = graph.account.copyToYouTubeMusic(id)
-                                    actions.say(problem ?: "Copied to YouTube Music. Songs you add here are added there too.")
-                                }
-                            })
-                        }
                         DropdownMenuItem(text = { Text("Delete playlist", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; deleting = true })
                     }
                 }

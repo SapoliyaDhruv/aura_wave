@@ -37,10 +37,6 @@ import kotlinx.coroutines.launch
 /** The listener's own music, stored on the device: likes, playlists, history and what to keep out of recommendations. */
 class Library(val dao: LibraryDao, private val scope: CoroutineScope) {
 
-    /** Set by the YouTube Music account, to send the listener's changes there. */
-    var onLikeChanged: ((Track, Boolean) -> Unit)? = null
-    var onSongsAdded: ((playlistId: Long, tracks: List<Track>) -> Unit)? = null
-    var onPlayStarted: ((Track) -> Unit)? = null
 
     // ---------- likes ----------
 
@@ -58,7 +54,6 @@ class Library(val dao: LibraryDao, private val scope: CoroutineScope) {
             } else {
                 dao.unlike(track.videoId)
             }
-            onLikeChanged?.invoke(track, liked)
         }
     }
 
@@ -67,8 +62,10 @@ class Library(val dao: LibraryDao, private val scope: CoroutineScope) {
     val recentlyPlayed: Flow<List<Track>> = dao.recentlyPlayed(100).map { rows -> rows.map(SongRow::toTrack) }
     val playCount: Flow<Int> = dao.playCount()
 
-    fun topSongs(since: Long, limit: Int = 50): Flow<List<SongPlays>> = dao.topSongs(since, limit)
-    fun listenedSince(since: Long): Flow<Long> = dao.listenedSince(since)
+    /** Nothing liked, saved, followed or played: a fresh install, or one that was never used. */
+    suspend fun isEmpty(): Boolean =
+        dao.allLikes().isEmpty() && dao.allPlaylists().isEmpty() && dao.allFollowedPodcasts().isEmpty() && dao.playCount().first() == 0
+
     suspend fun songPlaysSince(since: Long): List<SongPlays> = dao.songPlaysSince(since)
 
     fun clearHistory() {
@@ -77,7 +74,6 @@ class Library(val dao: LibraryDao, private val scope: CoroutineScope) {
 
     internal suspend fun startPlay(track: Track): Long {
         dao.upsertSong(track.toRow())
-        onPlayStarted?.invoke(track)
         return dao.insertPlay(PlayRow(videoId = track.videoId, startedAt = System.currentTimeMillis(), listenedMs = 0, completed = false))
     }
 
@@ -107,7 +103,6 @@ class Library(val dao: LibraryDao, private val scope: CoroutineScope) {
     suspend fun addToPlaylist(id: Long, tracks: List<Track>): Int {
         dao.upsertSongs(tracks.map { it.toRow() })
         val added = dao.appendToPlaylist(id, tracks.map { it.videoId }, System.currentTimeMillis())
-        if (added > 0) onSongsAdded?.invoke(id, tracks)
         return added
     }
 

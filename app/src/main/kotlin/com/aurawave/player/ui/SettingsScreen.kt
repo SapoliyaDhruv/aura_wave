@@ -68,7 +68,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 @Composable
-fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
+fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
     val actions = LocalSongActions.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -107,12 +107,8 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = listEnd(24.dp))) {
-            AccountSection(graph, onSignIn)
-
             SettingsGroup("Look and feel")
             LookSettings(graph)
-
-            FoldedGroup("Tab order") { TabOrderSettings(settings) }
 
             SettingsGroup("Playback")
             SwitchSetting(
@@ -203,14 +199,9 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             }
 
             FoldedGroup("Your data") {
-                Text(
-                    "Everything is stored on this phone. Back it up before reinstalling the app or switching phones.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                AutoBackupSetting(graph)
                 ActionSetting(
-                    title = "Back up library",
+                    title = "Save a backup elsewhere",
                     body = "${liked.size} liked, ${playlists.size} playlists, $plays plays",
                     onClick = { saveBackup.launch("aurawave-backup-${LocalDate.now()}.json") },
                 )
@@ -218,7 +209,7 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
                     title = "Restore from a backup",
                     body = "Merges a backup into this library. Backups from the old AuraWave app work too.",
                     enabled = progress !is Backup.Progress.Working,
-                    onClick = { openBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
+                    onClick = { openBackup.launch(BACKUP_TYPES) },
                 )
                 (progress as? Backup.Progress.Working)?.let { RestoreProgress(it) }
                 ActionSetting(
@@ -265,7 +256,7 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
     if (confirmClearHistory) {
         ConfirmDialog(
             title = "Clear listening history?",
-            body = "This also resets the play counts used for stats and recommendations. Liked songs and playlists are kept.",
+            body = "This also resets the play counts used for recommendations. Liked songs and playlists are kept.",
             confirmLabel = "Clear history",
             onDismiss = { confirmClearHistory = false },
             onConfirm = {
@@ -276,6 +267,12 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onSignIn: () -> Unit) {
             },
         )
     }
+}
+
+/** How a restore ended, wherever it was started from. Shown once, over the whole app. */
+@Composable
+fun RestoreOutcome(graph: AppGraph) {
+    val progress by graph.backup.progress.collectAsStateWithLifecycle()
     LaunchedEffect(progress) {
         // New history or likes change what is worth recommending.
         if (progress is Backup.Progress.Done) graph.recommender.invalidate()
@@ -388,7 +385,7 @@ private fun CrashSetting(graph: AppGraph) {
 }
 
 @Composable
-private fun RestoreProgress(p: Backup.Progress.Working) {
+fun RestoreProgress(p: Backup.Progress.Working) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
             if (p.total > 0) "${p.step}: ${p.done} of ${p.total}" else p.step,
@@ -440,70 +437,6 @@ private fun RestoreReport(report: Backup.Report, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
-}
-
-@Composable
-private fun AccountSection(graph: AppGraph, onSignIn: () -> Unit) {
-    val account = graph.account
-    val who by account.info.collectAsStateWithLifecycle()
-    val sync by account.sync.collectAsStateWithLifecycle()
-    val sendHistory by graph.settings.sendHistory.flow.collectAsStateWithLifecycle()
-    var confirmSignOut by remember { mutableStateOf(false) }
-    val actions = LocalSongActions.current
-
-    SettingsGroup("YouTube Music account")
-    val me = who
-    if (me == null) {
-        Text(
-            "Optional. Signing in keeps your liked songs, playlists, albums and artists in step with YouTube Music. " +
-                "Your login stays on this phone. YouTube's terms do not allow apps like this one to sign in, so use it at your own risk.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-        ActionSetting(title = "Sign in", body = "Opens Google's sign-in page", onClick = onSignIn)
-        return
-    }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Artwork(me.photoUrl, 40.dp, corner = 20.dp)
-        Column(Modifier.padding(start = 12.dp)) {
-            Text(me.name.ifEmpty { "Signed in" }, style = MaterialTheme.typography.bodyLarge)
-            if (me.handle.isNotEmpty()) Text(me.handle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-    val syncBody = when (val s = sync) {
-        is com.aurawave.player.data.Account.Sync.Working -> "Syncing: ${s.step}…"
-        is com.aurawave.player.data.Account.Sync.Failed -> s.message
-        is com.aurawave.player.data.Account.Sync.Idle ->
-            (if (s.lastSyncedAt == 0L) "Not synced yet" else "Last synced ${android.text.format.DateUtils.getRelativeTimeSpanString(s.lastSyncedAt)}") +
-                if (s.note.isNotEmpty()) "\n${s.note}" else ""
-    }
-    ActionSetting(
-        title = "Sync now",
-        body = syncBody,
-        enabled = sync !is com.aurawave.player.data.Account.Sync.Working,
-        onClick = account::syncNow,
-    )
-    SwitchSetting(
-        title = "Add plays to YouTube Music history",
-        body = "So recommendations on YouTube Music learn from what you play here",
-        checked = sendHistory,
-        onChange = { graph.settings.sendHistory.value = it },
-    )
-    ActionSetting(title = "Sign out", body = "Your library on this phone stays as it is", onClick = { confirmSignOut = true })
-    if (confirmSignOut) {
-        ConfirmDialog(
-            title = "Sign out of YouTube Music?",
-            body = "Changes stop syncing. Everything already in your library on this phone stays.",
-            confirmLabel = "Sign out",
-            onDismiss = { confirmSignOut = false },
-            onConfirm = {
-                confirmSignOut = false
-                account.signOut()
-                actions.say("Signed out")
-            },
-        )
-    }
 }
 
 @Composable
@@ -576,11 +509,67 @@ private fun LookSettings(graph: AppGraph) {
     }
     SwitchSetting(
         title = "Swipe on songs",
-        body = "Swipe a song right to play it next, left to like it. Swiping sideways on a song then works the song instead of changing tabs.",
+        body = "Swipe a song right to play it next, left to like it",
         checked = swipe,
         onChange = { settings.swipeSongs.value = it },
     )
 }
+
+/**
+ * The copy of the library kept in Documents/AuraWave. It is outside the app, so it is still
+ * there after an uninstall, and a reinstalled app offers to bring it back.
+ */
+@Composable
+private fun AutoBackupSetting(graph: AppGraph) {
+    val settings = graph.settings
+    val on by settings.autoBackup.flow.collectAsStateWithLifecycle()
+    val at by settings.autoBackupAt.flow.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val actions = LocalSongActions.current
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+        Text(
+            "Everything is stored on this phone. Save a backup before reinstalling the app or switching phones.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        return
+    }
+    SwitchSetting(
+        title = "Back up automatically",
+        body = when {
+            !on -> "Off. Your library is only on this phone and is lost if the app is uninstalled."
+            at == 0L -> "Keeps a copy in Documents/AuraWave each time you leave the app, so it survives an uninstall"
+            else -> "Copy in Documents/AuraWave, saved ${savedWhen(at)}"
+        },
+        checked = on,
+        onChange = { settings.autoBackup.value = it },
+    )
+    if (on) {
+        ActionSetting(
+            title = "Back up now",
+            body = "Saves the copy in Documents/AuraWave straight away",
+            onClick = {
+                scope.launch {
+                    actions.say(if (graph.backup.autoSave()) "Backup saved in Documents/AuraWave" else "Nothing to back up yet")
+                }
+            },
+        )
+    }
+}
+
+private fun savedWhen(at: Long): String {
+    val minutes = (System.currentTimeMillis() - at) / 60_000
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 24 * 60 -> "${minutes / 60} h ago"
+        else -> java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+    }
+}
+
+/** What a backup file may be called by the file picker; Android types .json files differently from phone to phone. */
+val BACKUP_TYPES = arrayOf("application/json", "text/plain", "application/octet-stream")
 
 /** Matches AudioQuality: about 70, 128 and 160 kbit/s. */
 private val QUALITIES = listOf("HIGH" to "High", "NORMAL" to "Normal", "LOW" to "Data saver")

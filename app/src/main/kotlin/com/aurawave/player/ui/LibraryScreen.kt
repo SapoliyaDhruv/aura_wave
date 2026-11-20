@@ -63,7 +63,7 @@ import com.aurawave.player.data.db.PlaylistSummary
 import com.aurawave.player.playback.PlayerConnection
 import kotlinx.coroutines.launch
 
-// The listener's own music, one tab each. AppRoot lays them out along the top.
+// The listener's own music, one shelf each. Library (in Tabs.kt) shows them under a row of chips.
 
 @Composable
 fun LikedTab(graph: AppGraph, player: PlayerConnection) {
@@ -93,19 +93,25 @@ fun ArtistsTab(graph: AppGraph) = ArtistShelf(graph)
 @Composable
 fun DownloadsTab(graph: AppGraph, player: PlayerConnection) = DownloadShelf(graph, player)
 
-/** Everything played, most recent first. Opened from the menu at the top. */
+/** Everything played, most recent first. Opened from Home's "Recently played". */
 @Composable
 fun HistoryScreen(graph: AppGraph, player: PlayerConnection, onBack: () -> Unit) {
-    val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
     Column(Modifier.fillMaxSize()) {
         BackBar(onBack, title = "Listening history")
-        SongShelf(
-            songs = history,
-            player = player,
-            emptyTitle = "Nothing played yet",
-            emptyBody = "Songs you listen to appear here, most recent first.",
-        )
+        HistoryShelf(graph, player)
     }
+}
+
+/** The same list, as one of Library's shelves. */
+@Composable
+fun HistoryShelf(graph: AppGraph, player: PlayerConnection) {
+    val history by graph.library.recentlyPlayed.collectAsStateWithLifecycle(initialValue = null)
+    SongShelf(
+        songs = history,
+        player = player,
+        emptyTitle = "Nothing played yet",
+        emptyBody = "Songs you listen to appear here, most recent first.",
+    )
 }
 
 @Composable
@@ -427,6 +433,6 @@ private fun LinkDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
 private fun sourceLabel(source: String): String = when (source) {
     "spotify" -> " · from Spotify"
     "youtube" -> " · from YouTube"
-    "ytm" -> " · synced with YouTube Music"
+    "ytm" -> " · from YouTube Music"
     else -> ""
 }

@@ -237,7 +237,7 @@ private fun SearchResult.isEmpty() =
     songs.isEmpty() && videos.isEmpty() && artists.isEmpty() && albums.isEmpty() && playlists.isEmpty() && podcasts.isEmpty()
 
 @Composable
-fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (ArtistRef) -> Unit, onBack: () -> Unit) {
+fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (ArtistRef) -> Unit, onBack: (() -> Unit)? = null) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val submit = { text: String ->
@@ -258,8 +258,9 @@ fun SearchScreen(state: SearchState, player: PlayerConnection, onOpenArtist: (Ar
 
     // The lists end above the keyboard, so the last rows can be reached while typing.
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
+        // As a tab it has no Back: the bar along the bottom is the way out.
+        Row(Modifier.fillMaxWidth().padding(start = if (onBack == null) 12.dp else 4.dp, end = if (onBack == null) 8.dp else 0.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
             SearchField(
                 query = state.query,
                 onQueryChange = state::onQueryChange,

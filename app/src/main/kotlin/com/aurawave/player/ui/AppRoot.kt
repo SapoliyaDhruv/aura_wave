@@ -2,11 +2,11 @@ package com.aurawave.player.ui
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -105,10 +105,8 @@ private sealed interface Screen {
     data class MixPage(val mix: Mix) : Screen
     data class Podcast(val ref: PodcastRef) : Screen
     data object Settings : Screen
-    data object Search : Screen
     data object History : Screen
-    data object Login : Screen
-    data object Stats : Screen
+    data object Liked : Screen
 }
 
 private class Page(val id: Int, val screen: Screen) {
@@ -134,7 +132,7 @@ private class PageStack {
     fun closeAll(): List<Page> = pages.toList().also { pages.clear() }
 }
 
-/** What fills the screen above the mini player: the tabs, or the newest page opened on top of them. */
+/** What fills the screen above the mini player: the tab chosen, or the newest page opened on top of it. */
 private data class Shown(val key: String, val screen: Screen?, val depth: Int)
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -142,11 +140,7 @@ private data class Shown(val key: String, val screen: Screen?, val depth: Int)
 fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     val likedIds by graph.library.likedIds.collectAsStateWithLifecycle()
     val downloads by graph.downloads.songs.collectAsStateWithLifecycle()
-    val tabOrder by graph.settings.tabOrder.flow.collectAsStateWithLifecycle()
-    val tabs = remember(tabOrder) { Tab.ordered(tabOrder) }
-    val openTabName by graph.settings.openTab.flow.collectAsStateWithLifecycle()
-    val homeIndex = tabs.indexOf(Tab.named(openTabName) ?: Tab.Home).coerceAtLeast(0)
-    val pager = rememberPagerState(initialPage = homeIndex) { tabs.size }
+    var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     val stack = remember { PageStack() }
     var nowPlayingOpen by rememberSaveable { mutableStateOf(false) }
     var addingToPlaylist by remember { mutableStateOf<List<Track>?>(null) }
@@ -191,16 +185,14 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
     // another page is on top of it, so Back returns to where the listener was.
     val pages = rememberSaveableStateHolder()
     val closePage: () -> Unit = { stack.close()?.let { pages.removeState(it.key) } }
-    val openSearch: () -> Unit = {
-        if (stack.top?.screen != Screen.Search) stack.open(Screen.Search)
-        search.askForFocus()
-    }
+    // Choosing a tab closes the pages opened on top. Search, chosen while it is showing (or
+    // with nothing typed yet), puts the cursor in its field.
     val showTab: (Tab) -> Unit = { t ->
         stack.closeAll().forEach { pages.removeState(it.key) }
-        tabs.indexOf(t).takeIf { it >= 0 }?.let { scope.launch { pager.animateScrollToPage(it) } }
+        if (t == Tab.Search && (tab == Tab.Search || search.query.isEmpty())) search.askForFocus()
+        tab = t
     }
-    // A new order in Settings: go back to the tab the app opens on.
-    LaunchedEffect(tabs, homeIndex) { if (pager.currentPage != homeIndex) pager.scrollToPage(homeIndex) }
+    val openSearch: () -> Unit = { showTab(Tab.Search); search.askForFocus() }
 
     // Remember the collection a queue was started from, so Home can offer to carry on with it.
     LaunchedEffect(player) {
@@ -255,12 +247,12 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                 if (player.current == null) nowPlayingOpen = false
             }
 
-            // Back closes the player, then the newest page, then returns to the tab the app opens on.
-            BackHandler(enabled = nowPlayingOpen || !stack.isEmpty || pager.currentPage != homeIndex) {
+            // Back closes the player, then the newest page, then returns to Home.
+            BackHandler(enabled = nowPlayingOpen || !stack.isEmpty || tab != Tab.Home) {
                 when {
                     nowPlayingOpen -> nowPlayingOpen = false
                     !stack.isEmpty -> closePage()
-                    else -> scope.launch { pager.animateScrollToPage(homeIndex) }
+                    else -> tab = Tab.Home
                 }
             }
 
@@ -271,7 +263,22 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                     containerColor = Palette.Ink,
                     snackbarHost = { SnackbarHost(snackbar) },
                     bottomBar = {
-                        Column {
+                        // The mini player and the bar are one sheet: the same colour (taken from the
+                        // cover while music plays), rounded only at its top corners, so the two
+                        // never sit awkwardly apart with the page showing between them.
+                        val sheetShape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER)
+                        val aura = LocalAura.current
+                        val sheetColor by androidx.compose.animation.animateColorAsState(
+                            if (player.current != null) lerp(Palette.Raised, aura.deep, 0.8f) else Palette.Raised,
+                            tween(300),
+                            label = "sheet",
+                        )
+                        Column(
+                            Modifier
+                                .shadow(12.dp, sheetShape, ambientColor = Color.Black, spotColor = Color.Black)
+                                .clip(sheetShape)
+                                .background(sheetColor),
+                        ) {
                             // The slot appears and goes with the music. While the player is open it
                             // keeps its height under the player and only its contents fade, so the
                             // page behind is never re-laid out during the motion.
@@ -280,7 +287,7 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                 enter = fadeIn(tween(200)) + expandVertically(tween(220)),
                                 exit = fadeOut(tween(160)) + shrinkVertically(tween(220)),
                             ) {
-                                Box(Modifier.fillMaxWidth().height(MINI_SLOT + navigationBarHeight())) {
+                                Box(Modifier.fillMaxWidth().height(MINI_HEIGHT).clipToBounds()) {
                                     sheetTransition.AnimatedVisibility(
                                         visible = { open -> !open },
                                         enter = fadeIn(tween(160, easing = LinearEasing)),
@@ -303,8 +310,11 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                             )
                                         }
                                     }
+                                    // A faint line between the song and the tabs.
+                                    Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(Palette.Line))
                                 }
                             }
+                            BottomBar(selected = tab, onSelect = showTab, color = Color.Transparent)
                         }
                     },
                 ) { padding ->
@@ -314,7 +324,7 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                         val top = stack.top
                         val listSpace = padding.calculateBottomPadding()
                         AnimatedContent(
-                            targetState = Shown(top?.key ?: "tabs", top?.screen, stack.pages.size),
+                            targetState = Shown(top?.key ?: "tab:${tab.name}", top?.screen, stack.pages.size),
                             modifier = Modifier.fillMaxSize(),
                             transitionSpec = { pageTransition(initialState.depth, targetState.depth) },
                             contentKey = { it.key },
@@ -331,35 +341,23 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                                     is Screen.Releases -> ReleasesScreen(graph, screen.title, screen.browseId, screen.params, onBack = closePage)
                                     is Screen.MixPage -> MixScreen(graph, player, screen.mix, onBack = closePage)
                                     is Screen.Podcast -> PodcastScreen(graph, player, screen.ref, onBack = closePage)
-                                    Screen.Settings -> SettingsScreen(graph, onBack = closePage, onSignIn = { stack.open(Screen.Login) })
-                                    Screen.Login -> LoginScreen(graph, onBack = closePage)
-                                    Screen.Stats -> StatsScreen(graph, player, onBack = closePage)
-                                    Screen.Search -> SearchScreen(search, player, onOpenArtist = actions.openArtist, onBack = closePage)
+                                    Screen.Settings -> SettingsScreen(graph, onBack = closePage)
                                     Screen.History -> HistoryScreen(graph, player, onBack = closePage)
-                                    null -> TabsHome(
-                                        tabs = tabs,
-                                        pager = pager,
-                                        onSearch = openSearch,
-                                        onHistory = { stack.open(Screen.History) },
-                                        onStats = { stack.open(Screen.Stats) },
-                                        onSettings = { stack.open(Screen.Settings) },
-                                    ) { tab ->
-                                        when (tab) {
-                                            Tab.Home -> HomeScreen(
-                                                graph,
-                                                player,
-                                                onOpenSearch = openSearch,
-                                                onOpenLiked = { showTab(Tab.Liked) },
-                                                onOpenHistory = { stack.open(Screen.History) },
-                                            )
-                                            Tab.Discover -> DiscoverScreen(graph, player, onOpenSearch = openSearch)
-                                            Tab.Liked -> LikedTab(graph, player)
-                                            Tab.Playlists -> PlaylistsTab(graph, player, onOpenPlaylist = actions.openPlaylist)
-                                            Tab.Podcasts -> PodcastsScreen(graph, player)
-                                            Tab.Albums -> AlbumsTab(graph)
-                                            Tab.Artists -> ArtistsTab(graph)
-                                            Tab.Downloads -> DownloadsTab(graph, player)
-                                        }
+                                    Screen.Liked -> Column(Modifier.fillMaxSize()) {
+                                        BackBar(closePage, title = "Liked songs")
+                                        LikedTab(graph, player)
+                                    }
+                                    null -> when (tab) {
+                                        Tab.Home -> HomeScreen(
+                                            graph,
+                                            player,
+                                            onOpenSearch = openSearch,
+                                            onOpenLiked = { stack.open(Screen.Liked) },
+                                            onOpenHistory = { stack.open(Screen.History) },
+                                        )
+                                        Tab.Search -> SearchScreen(search, player, onOpenArtist = actions.openArtist)
+                                        Tab.Library -> LibraryTab(graph, player, onOpenPlaylist = actions.openPlaylist, onSettings = { stack.open(Screen.Settings) })
+                                        Tab.Podcasts -> PodcastsScreen(graph, player)
                                     }
                                 }
                                 }
@@ -378,6 +376,9 @@ fun AppRoot(graph: AppGraph, player: PlayerConnection) {
                     }
                 }
             }
+
+            RestoreOutcome(graph)
+            WelcomeBack(graph)
 
             addingToPlaylist?.let { tracks ->
                 AddToPlaylistSheet(graph.library, tracks, onDismiss = { addingToPlaylist = null }, say = actions.say)
@@ -437,14 +438,12 @@ private val PlayerEnter = slideInVertically(tween(PLAYER_TRAVEL_MS, easing = Lin
 private val PlayerExit = slideOutVertically(tween(PLAYER_TRAVEL_MS, easing = LinearEasing)) { it } +
     fadeOut(tween(140, delayMillis = PLAYER_TRAVEL_MS - 140, easing = LinearEasing))
 
-/** The mini player's slot above the tabs. Fixed, so the page underneath never shifts while the player opens or closes. */
-private val MINI_HEIGHT = 60.dp
-private val MINI_TOP_GAP = 6.dp
-private val MINI_SLOT = MINI_HEIGHT + MINI_TOP_GAP
-/** The mini player's corners; with its 60 dp height, nearly a pill, and close to the screen's own corners at the bottom. */
-private val MINI_CORNER = 28.dp
-/** The gap around the cover inside the mini player, so the cover's corners run parallel to the bar's. */
-private val MINI_INSET = 8.dp
+/** The mini player's slot above the bottom bar. Fixed, so the page underneath never shifts while the player opens or closes. */
+private val MINI_HEIGHT = 64.dp
+/** The top corners of the sheet the mini player and the bottom bar share. */
+private val SHEET_CORNER = 24.dp
+/** The gap above the cover, so the cover's corners run parallel to the sheet's. */
+private val MINI_INSET = (MINI_HEIGHT - MINI_COVER) / 2
 
 /**
  * The playing song, above the tabs. Tap it or swipe it up to open the player, which rises
@@ -463,7 +462,6 @@ private fun MiniPlayer(
 ) {
     val item = player.current ?: return
     val meta = item.mediaMetadata
-    val aura = LocalAura.current
     val offset = remember { Animatable(0f) }
     val lift = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -473,16 +471,11 @@ private fun MiniPlayer(
     val maxDrop = with(density) { 56.dp.toPx() }
     val flingSpeed = with(density) { 700.dp.toPx() }
     val screenHeight = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
-    // A soft pill, its ends following the same curve as the cover inside it, as One UI draws it.
-    val shape = RoundedCornerShape(MINI_CORNER)
-    // It runs down to the screen's edge. Where the phone shows a navigation bar, the pill
-    // reaches under it and keeps its own buttons above it.
-    val underBar = navigationBarHeight()
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = 4.dp, end = 4.dp, top = MINI_TOP_GAP)
-            .height(MINI_HEIGHT + underBar)
+            .height(MINI_HEIGHT)
+            .clickable(onClickLabel = "Open player", onClick = onOpen)
             .graphicsLayer {
                 translationX = offset.value
                 translationY = lift.value
@@ -549,15 +542,11 @@ private fun MiniPlayer(
                         }
                     },
                 )
-            }
-            .shadow(10.dp, shape, ambientColor = Color.Black, spotColor = Color.Black)
-            .clip(shape)
-            // One calm colour taken from the cover, with no outline.
-            .background(lerp(Palette.Raised, aura.deep, 0.8f))
-            .clickable(onClickLabel = "Open player", onClick = onOpen),
+            },
     ) {
-        Row(Modifier.fillMaxSize().padding(start = MINI_INSET, end = 4.dp, bottom = underBar), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(meta.artworkUri?.toString(), MINI_COVER, Modifier.playerCover(), corner = MINI_CORNER - MINI_INSET)
+        // The sheet's colour stays put; only the song moves under a swipe.
+        Row(Modifier.fillMaxSize().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Artwork(meta.artworkUri?.toString(), MINI_COVER, Modifier.playerCover(), corner = SHEET_CORNER - MINI_INSET)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -584,6 +573,3 @@ private fun MiniPlayer(
         }
     }
 }
-
-@Composable
-private fun navigationBarHeight() = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
